@@ -164,6 +164,7 @@ auction/
 
 ```bash
 pnpm install          # установка (Node 22+, pnpm 11+)
+pnpm check:env        # проверить коннект к managed PG/Redis (+ Lua, PTTL, pub/sub)
 pnpm dev              # api + web в watch-режиме
 pnpm build            # сборка всех пакетов воркспейса
 pnpm test             # юнит + интеграционные
@@ -174,6 +175,8 @@ pnpm db:studio        # Prisma Studio
 ```
 
 **Docker в dev не нужен** — PostgreSQL и Redis managed (см. раздел 2). `docker compose` в этом проекте не является путём разработки; образы собирает CI, разворачивает Kubernetes.
+
+Первый запуск и получение строк подключения — [docs/dev-setup.md](docs/dev-setup.md).
 
 ---
 

@@ -2,7 +2,7 @@
 
 ## Phase 0 — Фундамент
 - [x] T-001 — Монорепо и тулинг (NFR-01, 3ч)
-- [ ] T-002 — Dev-окружение Docker Compose (NFR-01/DATA-01, 3ч)
+- [x] T-002 — Dev-окружение: managed PG/Redis вместо Docker Compose (NFR-01/DATA-01, 3ч) — переформулировано, см. docs/dev-setup.md
 - [ ] T-003 — CI-пайплайн (NFR-01, 4ч)
 - [ ] T-004 — Линтеры и правила коммитов (NFR-01, 2ч)
 - [ ] T-005 — Каркас NestJS (NFR-01, 3ч)
