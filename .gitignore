@@ -1,0 +1,43 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build
+dist/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# test / coverage
+coverage/
+.nyc_output/
+playwright-report/
+test-results/
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# editors / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# prisma local artifacts
+prisma/*.db
+prisma/*.db-journal
+
+# misc
+.turbo/
+.cache/
+tmp/
