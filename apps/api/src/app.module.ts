@@ -10,6 +10,7 @@ import { ZodValidationPipe } from 'nestjs-zod';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { validateEnv, type Env } from './config/env.schema';
 import { HealthModule } from './health/health.module';
+import { TimeModule } from './time/time.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { HealthModule } from './health/health.module';
     }),
 
     CryptoModule,
+    TimeModule,
     HealthModule,
   ],
 
