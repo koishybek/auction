@@ -3,6 +3,8 @@ import { dirname, resolve } from 'node:path';
 
 import { config as loadEnv } from 'dotenv';
 
+import type { PrismaService } from '../src/prisma/prisma.service';
+
 /**
  * Отдельная база для e2e. Прогон тестов чистит таблицы, поэтому запускать их
  * на dev-базе нельзя — данные разработчика исчезнут без предупреждения.
@@ -28,6 +30,34 @@ export function withDatabase(connectionString: string, database: string): string
 
 export function databaseNameOf(connectionString: string): string {
   return new URL(connectionString).pathname.replace(/^\//, '');
+}
+
+/**
+ * Единая очистка данных между тестами.
+ *
+ * Порядок продиктован внешними ключами: сначала дети, потом родители.
+ * Живёт в одном месте, чтобы каждый e2e-файл не изобретал свой список и не
+ * ронял соседний файл забытой таблицей (lots_seller_id_fkey тому свидетель).
+ *
+ * bids и audit_log здесь НЕТ намеренно: они append-only, удаление запрещено
+ * триггером БД. Тесты, создающие ставки, обязаны работать на уникальных
+ * пользователях и лотах, а не рассчитывать на глобальную зачистку.
+ */
+export async function cleanDatabase(prisma: PrismaService): Promise<void> {
+  await prisma.registryCheck.deleteMany();
+  await prisma.openHouseBooking.deleteMany();
+  await prisma.openHouseSlot.deleteMany();
+  await prisma.lotDocument.deleteMany();
+  await prisma.refBonus.deleteMany();
+  await prisma.payoutSplit.deleteMany();
+  await prisma.payment.deleteMany();
+  await prisma.deposit.deleteMany();
+  await prisma.auctionSession.deleteMany();
+  await prisma.lot.deleteMany();
+  await prisma.partnerLead.deleteMany();
+  await prisma.notification.deleteMany();
+  await prisma.authSession.deleteMany();
+  await prisma.user.deleteMany();
 }
 
 /**

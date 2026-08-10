@@ -8,7 +8,7 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 
-import { databaseNameOf } from './test-db';
+import { cleanDatabase, databaseNameOf } from './test-db';
 
 // getHttpServer() типизирован как any — заворачиваем один раз, а не в каждом тесте.
 function api(): ReturnType<typeof request> {
@@ -40,8 +40,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await prisma.authSession.deleteMany();
-  await prisma.user.deleteMany();
+  await cleanDatabase(prisma);
 });
 
 describe('окружение теста', () => {

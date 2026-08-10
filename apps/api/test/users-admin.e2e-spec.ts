@@ -8,6 +8,8 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 
+import { cleanDatabase } from './test-db';
+
 let app: INestApplication;
 let prisma: PrismaService;
 
@@ -50,9 +52,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await prisma.authSession.deleteMany();
-  await prisma.user.deleteMany();
-  // audit_log append-only: чистить нельзя, да и незачем — проверки считают дельту.
+  await cleanDatabase(prisma);
 });
 
 describe('T-013: профиль и статусы верификации', () => {

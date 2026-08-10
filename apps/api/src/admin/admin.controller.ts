@@ -24,8 +24,16 @@ const SetStatusSchema = z
   })
   .strict();
 
+const SetRolesSchema = z
+  .object({
+    roles: z.array(z.enum(['INVESTOR', 'SELLER', 'PARTNER', 'ADMIN'])).min(1),
+    reason: z.string().min(3).max(500),
+  })
+  .strict();
+
 class ListUsersDto extends createZodDto(ListUsersSchema) {}
 class SetStatusDto extends createZodDto(SetStatusSchema) {}
+class SetRolesDto extends createZodDto(SetRolesSchema) {}
 
 /** Весь контроллер только для ADMIN — класс-уровневый @Roles. Задача вне ТЗ (ОВ-8). */
 @ApiTags('admin')
@@ -46,6 +54,21 @@ export class AdminController {
       pageSize: query.pageSize,
       status: query.status,
       actorId: actor.id,
+    });
+  }
+
+  @Patch('users/:id/roles')
+  @ApiOperation({ summary: 'Назначить роли (единственный путь стать продавцом или партнёром)' })
+  setRoles(
+    @Param('id', ParseUUIDPipe) userId: string,
+    @Body() body: SetRolesDto,
+    @CurrentUser() actor: AuthenticatedUser,
+  ): Promise<{ id: string; roles: readonly string[] }> {
+    return this.admin.setUserRoles({
+      userId,
+      roles: body.roles,
+      actorId: actor.id,
+      reason: body.reason,
     });
   }
 

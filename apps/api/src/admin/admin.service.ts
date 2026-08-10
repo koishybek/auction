@@ -88,6 +88,44 @@ export class AdminService {
   }
 
   /**
+   * Назначение ролей. Единственный путь стать продавцом или партнёром:
+   * самозапись в эти роли означала бы, что кто угодно размещает лоты
+   * (допущение из T-012, порядок выдачи ролей ТЗ не описывает — ОВ-8).
+   *
+   * Перевыпуск токенов не нужен: гвард читает роли из БД на каждый запрос,
+   * смена действует немедленно.
+   */
+  async setUserRoles(input: {
+    userId: string;
+    roles: readonly ('INVESTOR' | 'SELLER' | 'PARTNER' | 'ADMIN')[];
+    actorId: string;
+    reason: string;
+  }): Promise<{ id: string; roles: readonly string[] }> {
+    const user = await this.prisma.user.findUnique({ where: { id: input.userId } });
+    if (!user) {
+      throw new NotFoundException({ code: 'USER_NOT_FOUND' });
+    }
+
+    const updated = await this.prisma.user.update({
+      where: { id: input.userId },
+      data: { roles: [...input.roles] },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        actor: input.actorId,
+        action: 'admin.user.set-roles',
+        entity: 'users',
+        entityId: input.userId,
+        payloadJson: { from: user.roles, to: [...input.roles], reason: input.reason },
+        serverTs: new Date(this.time.wallClockMs()),
+      },
+    });
+
+    return { id: updated.id, roles: updated.roles };
+  }
+
+  /**
    * Блокировка. Вместе со статусом гасятся ВСЕ сессии: JwtAuthGuard и так
    * отбил бы заблокированного по статусу, но живые refresh-токены при этом
    * продолжали бы существовать — а мёртвый вход должен быть мёртв целиком.

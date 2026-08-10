@@ -8,6 +8,8 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 
+import { cleanDatabase } from './test-db';
+
 let app: INestApplication;
 let prisma: PrismaService;
 
@@ -48,8 +50,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-  await prisma.authSession.deleteMany();
-  await prisma.user.deleteMany();
+  await cleanDatabase(prisma);
 });
 
 describe('eGov-флоу: init → approve → complete → JWT', () => {
