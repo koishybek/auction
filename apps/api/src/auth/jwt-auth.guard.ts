@@ -40,12 +40,19 @@ export class JwtAuthGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
+    const request = context.switchToHttp().getRequest<Request & { user?: AuthenticatedUser }>();
+    const token = extractBearer(request.headers.authorization);
+
     if (isPublic === true) {
+      // Публичная ручка, но токен прислали — распознаём пользователя по мере сил.
+      // Нужно публичной карточке лота: владелец видит свой черновик, аноним — нет.
+      // Любая проблема с токеном здесь НЕ ошибка: просто остаёмся анонимом.
+      if (token !== null) {
+        await this.tryAttachUser(request, token);
+      }
       return true;
     }
 
-    const request = context.switchToHttp().getRequest<Request & { user?: AuthenticatedUser }>();
-    const token = extractBearer(request.headers.authorization);
     if (token === null) {
       throw new UnauthorizedException({ code: AUTH_ERROR.INVALID_TOKEN });
     }
@@ -82,6 +89,33 @@ export class JwtAuthGuard implements CanActivate {
       egovVerified: session.user.egovVerifiedAt !== null,
     };
     return true;
+  }
+
+  /** Аутентификация без права на ошибку: не вышло — остаёмся анонимом. */
+  private async tryAttachUser(request: { user?: AuthenticatedUser }, token: string): Promise<void> {
+    try {
+      const payload = this.tokens.verifyAccess(token);
+      const session = await this.prisma.authSession.findUnique({
+        where: { id: payload.sid },
+        include: { user: { select: { status: true, roles: true, egovVerifiedAt: true } } },
+      });
+      if (
+        !session ||
+        session.revokedAt !== null ||
+        session.expiresAt <= new Date(this.time.wallClockMs()) ||
+        session.user.status === 'BLOCKED'
+      ) {
+        return;
+      }
+      request.user = {
+        id: session.userId,
+        roles: session.user.roles,
+        sessionId: session.id,
+        egovVerified: session.user.egovVerifiedAt !== null,
+      };
+    } catch {
+      // Кривой токен на публичной ручке — не ошибка.
+    }
   }
 }
 

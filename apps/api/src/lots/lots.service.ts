@@ -1,0 +1,291 @@
+import {
+  PUBLIC_LOT_STATUSES,
+  fromTenge,
+  tiyn,
+  toTenge,
+  type LotListView,
+  type LotStatusValue,
+  type LotView,
+} from '@auction/shared';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+
+import type { AuthenticatedUser } from '../auth/auth.types';
+import { PiiCryptoService } from '../common/crypto/pii-crypto.service';
+import type { Lot } from '../generated/prisma/client';
+import type { LotStatus } from '../generated/prisma/enums';
+import { REGISTRY_PROVIDER, type RegistryProvider } from '../integrations/registry/registry.types';
+import { PrismaService } from '../prisma/prisma.service';
+import { TimeService } from '../time/time.service';
+
+import {
+  checkTransition,
+  transitionDescription,
+  type LotTransitionActor,
+} from './lot-status.machine';
+
+/** Сущность Prisma → DTO на провод. Тиыны → тенге ровно здесь, на границе. */
+function toView(lot: Lot): LotView {
+  return {
+    id: lot.id,
+    type: lot.type,
+    cadastreOrVin: lot.cadastreOrVin,
+    status: lot.status,
+    startPriceTenge: Number(toTenge(tiyn(lot.startPriceTiyn))),
+    currentPriceTenge:
+      lot.currentPriceTiyn === null ? null : Number(toTenge(tiyn(lot.currentPriceTiyn))),
+    sellerId: lot.sellerId,
+    createdAt: lot.createdAt.toISOString(),
+    updatedAt: lot.updatedAt.toISOString(),
+  };
+}
+
+@Injectable()
+export class LotsService {
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly time: TimeService,
+    private readonly pii: PiiCryptoService,
+    @Inject(REGISTRY_PROVIDER) private readonly registry: RegistryProvider,
+  ) {}
+
+  /** Черновик создаёт продавец. Деньги приходят в тенге, хранятся в тиынах. */
+  async createDraft(input: {
+    sellerId: string;
+    type: 'REALTY' | 'VEHICLE';
+    cadastreOrVin: string;
+    startPriceTenge: number;
+  }): Promise<LotView> {
+    const lot = await this.prisma.lot.create({
+      data: {
+        sellerId: input.sellerId,
+        type: input.type,
+        cadastreOrVin: input.cadastreOrVin.trim().toUpperCase(),
+        startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)),
+      },
+    });
+    return toView(lot);
+  }
+
+  /** Правка только собственного ЧЕРНОВИКА: после модерации параметры заморожены. */
+  async updateDraft(input: {
+    lotId: string;
+    sellerId: string;
+    cadastreOrVin?: string | undefined;
+    startPriceTenge?: number | undefined;
+  }): Promise<LotView> {
+    const lot = await this.requireOwnLot(input.lotId, input.sellerId);
+    if (lot.status !== 'DRAFT') {
+      throw new ConflictException({
+        code: 'LOT_NOT_EDITABLE',
+        message: 'Править можно только черновик — после модерации параметры лота заморожены',
+      });
+    }
+
+    const updated = await this.prisma.lot.update({
+      where: { id: lot.id },
+      data: {
+        ...(input.cadastreOrVin === undefined
+          ? {}
+          : { cadastreOrVin: input.cadastreOrVin.trim().toUpperCase() }),
+        ...(input.startPriceTenge === undefined
+          ? {}
+          : { startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)) }),
+      },
+    });
+    return toView(updated);
+  }
+
+  /**
+   * Карточка лота. Публичные статусы видны всем (каталог), черновики и
+   * модерация — только владельцу и админу: чужая незавершённая заявка —
+   * не публичная информация.
+   */
+  async getById(lotId: string, viewer: AuthenticatedUser | null): Promise<LotView> {
+    const lot = await this.prisma.lot.findUnique({ where: { id: lotId } });
+    if (!lot) {
+      throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
+    }
+
+    const isPublic = (PUBLIC_LOT_STATUSES as readonly string[]).includes(lot.status);
+    const isOwner = viewer !== null && viewer.id === lot.sellerId;
+    const isAdmin = viewer !== null && viewer.roles.includes('ADMIN');
+    if (!isPublic && !isOwner && !isAdmin) {
+      // 404, а не 403: не подтверждаем сам факт существования чужого черновика.
+      throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
+    }
+    return toView(lot);
+  }
+
+  /** Публичный каталог: только публичные статусы, свежие сверху. */
+  async listPublic(input: {
+    page: number;
+    pageSize: number;
+    type?: 'REALTY' | 'VEHICLE' | undefined;
+    status?: LotStatusValue | undefined;
+  }): Promise<LotListView> {
+    const statusFilter =
+      input.status !== undefined &&
+      (PUBLIC_LOT_STATUSES as readonly string[]).includes(input.status)
+        ? [input.status]
+        : (PUBLIC_LOT_STATUSES as readonly LotStatus[]);
+
+    const where = {
+      status: { in: [...statusFilter] },
+      ...(input.type === undefined ? {} : { type: input.type }),
+    };
+
+    const [lots, total] = await Promise.all([
+      this.prisma.lot.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (input.page - 1) * input.pageSize,
+        take: input.pageSize,
+      }),
+      this.prisma.lot.count({ where }),
+    ]);
+
+    return { items: lots.map(toView), total, page: input.page, pageSize: input.pageSize };
+  }
+
+  /** Лоты продавца — все статусы, включая черновики. */
+  async listMine(sellerId: string, page: number, pageSize: number): Promise<LotListView> {
+    const where = { sellerId };
+    const [lots, total] = await Promise.all([
+      this.prisma.lot.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.lot.count({ where }),
+    ]);
+    return { items: lots.map(toView), total, page, pageSize };
+  }
+
+  /**
+   * Продавец отправляет черновик на модерацию.
+   *
+   * Здесь происходит проверка КИСИП/ЕРД (INT-02, T-019): по ИИН продавца и
+   * кадастру/VIN объекта. ТЗ говорит «при создании лота» — трактуем как момент
+   * подачи на платформу: черновик у себя человек может держать любой, а вот
+   * заявка с арестованным объектом не должна дойти даже до модератора.
+   *
+   * Ограничение найдено → лот остаётся в DRAFT, продавцу — 409 с причинами.
+   * Каждая проверка, включая чистую, пишется в registry_checks: история
+   * проверок — часть досье лота.
+   */
+  async submit(lotId: string, seller: AuthenticatedUser): Promise<LotView> {
+    const lot = await this.requireOwnLot(lotId, seller.id);
+    if (lot.status !== 'DRAFT') {
+      // Ранний отказ до похода в реестр: сам переход всё равно невозможен.
+      throw new ConflictException({
+        code: 'INVALID_TRANSITION',
+        message: `Переход ${lot.status} → MODERATION не существует`,
+      });
+    }
+
+    // Реестр проверяет по ИИН собственника — без верификации проверять нечем.
+    if (!seller.egovVerified) {
+      throw new ForbiddenException({ code: 'EGOV_NOT_VERIFIED' });
+    }
+    const sellerRow = await this.prisma.user.findUniqueOrThrow({ where: { id: seller.id } });
+    if (sellerRow.iinEnc === null) {
+      throw new ForbiddenException({ code: 'EGOV_NOT_VERIFIED' });
+    }
+    const iin = this.pii.decrypt(sellerRow.iinEnc, 'users.iin');
+
+    const result = await this.registry.check({ iinOrBin: iin, cadastreOrVin: lot.cadastreOrVin });
+
+    await this.prisma.registryCheck.create({
+      data: {
+        lotId: lot.id,
+        hasRestriction: result.hasRestriction,
+        payloadJson: result.payload,
+        checkedAt: new Date(this.time.wallClockMs()),
+      },
+    });
+
+    if (result.hasRestriction) {
+      throw new ConflictException({
+        code: 'REGISTRY_RESTRICTION',
+        message: `Публикация невозможна: ${result.restrictions.join('; ')}`,
+      });
+    }
+
+    return this.transition({ lotId, to: 'MODERATION', actor: 'SELLER', actorId: seller.id });
+  }
+
+  /**
+   * Единственная точка смены статуса. Правомерность решает таблица переходов,
+   * не вызывающий код. Недопустимый переход = 409 (DoD T-015).
+   *
+   * Обновление идёт через updateMany со старым статусом в WHERE: две
+   * конкурирующие смены статуса не пройдут обе — вторая не найдёт строку
+   * в исходном состоянии и получит 409.
+   */
+  async transition(input: {
+    lotId: string;
+    to: LotStatus;
+    actor: LotTransitionActor;
+    actorId: string | null;
+  }): Promise<LotView> {
+    const lot = await this.prisma.lot.findUnique({ where: { id: input.lotId } });
+    if (!lot) {
+      throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
+    }
+
+    const check = checkTransition(lot.status, input.to, input.actor);
+    if (!check.allowed) {
+      throw new ConflictException({ code: 'INVALID_TRANSITION', message: check.reason });
+    }
+
+    const result = await this.prisma.lot.updateMany({
+      where: { id: lot.id, status: lot.status },
+      data: { status: input.to },
+    });
+    if (result.count === 0) {
+      // Кто-то успел изменить статус между чтением и записью.
+      throw new ConflictException({
+        code: 'INVALID_TRANSITION',
+        message: 'Статус лота изменился, повторите операцию',
+      });
+    }
+
+    await this.prisma.auditLog.create({
+      data: {
+        actor: input.actorId ?? 'SYSTEM',
+        action: 'lot.transition',
+        entity: 'lots',
+        entityId: lot.id,
+        payloadJson: {
+          from: lot.status,
+          to: input.to,
+          asRole: input.actor,
+          description: transitionDescription(lot.status, input.to),
+        },
+        serverTs: new Date(this.time.wallClockMs()),
+      },
+    });
+
+    const fresh = await this.prisma.lot.findUniqueOrThrow({ where: { id: lot.id } });
+    return toView(fresh);
+  }
+
+  private async requireOwnLot(lotId: string, sellerId: string): Promise<Lot> {
+    const lot = await this.prisma.lot.findUnique({ where: { id: lotId } });
+    if (!lot) {
+      throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
+    }
+    if (lot.sellerId !== sellerId) {
+      // Владение — в сервисе, роль — в гварде (CLAUDE.md §4.5).
+      throw new ForbiddenException({ code: 'NOT_LOT_OWNER' });
+    }
+    return lot;
+  }
+}

@@ -12,6 +12,7 @@ import { AuthModule } from './auth/auth.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { validateEnv, type Env } from './config/env.schema';
 import { HealthModule } from './health/health.module';
+import { LotsModule } from './lots/lots.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TimeModule } from './time/time.module';
 import { UsersModule } from './users/users.module';
@@ -81,6 +82,7 @@ import { UsersModule } from './users/users.module';
     AuthModule,
     UsersModule,
     AdminModule,
+    LotsModule,
     HealthModule,
   ],
 
