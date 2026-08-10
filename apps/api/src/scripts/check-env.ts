@@ -68,6 +68,27 @@ function majorVersion(raw: string): number {
   return match?.[1] !== undefined ? Number.parseInt(match[1], 10) : 0;
 }
 
+const LOCAL_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '::1']);
+
+/**
+ * Локальный ли адрес.
+ *
+ * Решение dev-окружения: для localhost шифрование не требуется — трафик не покидает
+ * машину, а локальный PostgreSQL работает по trust-аутентификации. Это осознанный
+ * выбор, а не недоделка (docs/dev-setup.md). Для любого удалённого хоста отсутствие
+ * TLS остаётся ошибкой: там в трафике ходят ПДн и деньги.
+ */
+function isLocal(url: string): boolean {
+  try {
+    // URL.hostname отдаёт IPv6 в скобках («[::1]»), их надо снять — иначе ::1
+    // не распознаётся как локальный и проверка ругается на ровном месте.
+    const host = new URL(url).hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    return LOCAL_HOSTS.has(host) || host.endsWith('.localhost');
+  } catch {
+    return false;
+  }
+}
+
 // ─── PostgreSQL ──────────────────────────────────────────────────────────────
 
 /**
@@ -104,7 +125,9 @@ async function checkPostgres(label: string, url: string, ddl: boolean): Promise<
     results.push(
       tlsOn
         ? ok(`${label}: TLS`, 'соединение шифруется', null)
-        : fail(`${label}: TLS`, 'соединение без шифрования — добавь sslmode=require'),
+        : isLocal(url)
+          ? ok(`${label}: TLS`, 'localhost — шифрование не требуется (решение dev-окружения)', null)
+          : fail(`${label}: TLS`, 'удалённый Postgres без шифрования — добавь sslmode=require'),
     );
 
     if (ddl) {
@@ -181,7 +204,9 @@ async function checkRedis(url: string): Promise<CheckResult[]> {
     results.push(
       url.startsWith('rediss://')
         ? ok('Redis: TLS', 'rediss:// — соединение шифруется', null)
-        : fail('Redis: TLS', 'redis:// без TLS — используй rediss://'),
+        : isLocal(url)
+          ? ok('Redis: TLS', 'localhost — шифрование не требуется (решение dev-окружения)', null)
+          : fail('Redis: TLS', 'удалённый Redis без TLS — используй rediss://'),
     );
 
     // T-024: ядро ставки — единственный Lua-скрипт. Managed-тарифы иногда режут EVAL.
