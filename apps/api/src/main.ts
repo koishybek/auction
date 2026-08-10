@@ -2,11 +2,11 @@
 import 'reflect-metadata';
 
 import { HttpAdapterHost, NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { Application } from 'express';
 import { Logger, LoggerErrorInterceptor } from 'nestjs-pino';
+import { cleanupOpenApiDoc } from 'nestjs-zod';
 
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
@@ -21,21 +21,8 @@ async function bootstrap(): Promise<void> {
   app.useLogger(logger);
   app.useGlobalInterceptors(new LoggerErrorInterceptor());
 
-  /**
-   * Глобальный пайп настраивается ровно здесь и один раз — те же правила
-   * обязаны действовать в e2e-тестах, иначе тесты проверяют не то приложение.
-   *
-   * forbidNonWhitelisted важнее, чем кажется: он не даёт протащить лишние поля
-   * в запрос ставки (QA-04, попытка подмены суммы через DevTools/Postman).
-   */
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-      transformOptions: { enableImplicitConversion: false },
-    }),
-  );
+  // Валидирующий пайп живёт в AppModule через APP_PIPE — так он один и тот же
+  // в проде и в e2e-тестах, которые поднимают модуль, а не main.ts.
 
   app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost), logger));
 
@@ -56,7 +43,11 @@ async function bootstrap(): Promise<void> {
     .setVersion('0.0.0')
     .addBearerAuth()
     .build();
-  SwaggerModule.setup('docs', app, () => SwaggerModule.createDocument(app, openApi));
+  // cleanupOpenApiDoc обязателен: он превращает Zod-схемы DTO в корректные
+  // схемы OpenAPI. Без него /docs отдаёт документ с пустыми телами запросов.
+  SwaggerModule.setup('docs', app, () =>
+    cleanupOpenApiDoc(SwaggerModule.createDocument(app, openApi)),
+  );
 
   const port = config.get('API_PORT', { infer: true });
   await app.listen(port);

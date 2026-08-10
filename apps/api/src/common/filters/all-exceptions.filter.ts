@@ -8,6 +8,8 @@ import {
 import { HttpAdapterHost } from '@nestjs/core';
 import type { Request, Response } from 'express';
 import { Logger } from 'nestjs-pino';
+import { ZodValidationException } from 'nestjs-zod';
+import { z } from 'zod';
 
 /** Порог «наша вина». Обычное число, а не член enum: status приходит как number. */
 const SERVER_ERROR_FROM = 500;
@@ -59,12 +61,28 @@ export class AllExceptionsFilter implements ExceptionFilter {
   }
 
   private messageFor(exception: unknown, status: number): string | readonly string[] {
+    /**
+     * Разворачиваем ошибку валидации в список «поле: что не так».
+     * Сам по себе ZodValidationException отдаёт наружу только «Validation failed»,
+     * по которому клиент не поймёт, что именно чинить. Тексты Zod описывают
+     * ограничения полей и внутренностей сервера не раскрывают.
+     */
+    if (exception instanceof ZodValidationException) {
+      // getZodError() типизирован как unknown: nestjs-zod поддерживает и Zod 3, и Zod 4.
+      const zodError: unknown = exception.getZodError();
+      if (zodError instanceof z.ZodError) {
+        return zodError.issues.map((issue) => {
+          const path = issue.path.map(String).join('.');
+          return path === '' ? issue.message : `${path}: ${issue.message}`;
+        });
+      }
+    }
+
     if (exception instanceof HttpException) {
       const payload = exception.getResponse();
       if (typeof payload === 'string') {
         return payload;
       }
-      // ValidationPipe кладёт сюда список полей — он безопасен и полезен клиенту.
       const message = (payload as { message?: unknown }).message;
       if (typeof message === 'string') {
         return message;

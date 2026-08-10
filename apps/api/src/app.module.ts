@@ -3,7 +3,9 @@ import { resolve } from 'node:path';
 
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_PIPE } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
+import { ZodValidationPipe } from 'nestjs-zod';
 
 import { validateEnv, type Env } from './config/env.schema';
 import { HealthModule } from './health/health.module';
@@ -68,6 +70,21 @@ import { HealthModule } from './health/health.module';
     }),
 
     HealthModule,
+  ],
+
+  providers: [
+    /**
+     * Единственный валидирующий пайп приложения. Схема Zod — единственный
+     * источник истины: из неё же выводится тип DTO (createZodDto) и схема OpenAPI.
+     *
+     * Регистрируем через APP_PIPE, а не app.useGlobalPipes в main.ts: тогда пайп
+     * поднимается вместе с модулем, и e2e-тесты гоняют ровно те же правила, что прод.
+     *
+     * Аналог forbidNonWhitelisted — .strict() на схеме запроса. Zod по умолчанию
+     * молча выбрасывает лишние ключи, а нам нужен отказ: попытка протащить лишнее
+     * поле в ставку обязана быть видна (QA-04).
+     */
+    { provide: APP_PIPE, useClass: ZodValidationPipe },
   ],
 })
 export class AppModule {}
