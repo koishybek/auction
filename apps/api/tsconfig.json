@@ -3,7 +3,12 @@
   "compilerOptions": {
     "rootDir": "src",
     "outDir": "dist",
-    "types": ["node"]
+    "types": ["node"],
+
+    // DI в NestJS читает типы конструкторов из метаданных, которые emit'ит tsc.
+    // Поэтому же сборку нельзя переводить на esbuild/swc без отдельной настройки.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true
   },
   "include": ["src/**/*"]
 }
