@@ -1,0 +1,23 @@
+# Stage. Домен и владелец репозитория подставляются при первом выкате.
+
+image:
+  repository: OWNER/auction
+
+api:
+  replicaCount: 1
+  env:
+    NODE_ENV: production
+    LOG_PRETTY: 'false'
+
+web:
+  replicaCount: 1
+
+# Включатся, когда появится apps/workers (T-020, T-027).
+workers:
+  enabled: false
+
+ingress:
+  host: stage.auction.example.kz
+  tls:
+    enabled: true
+    secretName: auction-stage-tls

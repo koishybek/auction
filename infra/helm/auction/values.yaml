@@ -1,0 +1,88 @@
+# Значения по умолчанию. Окружения переопределяют их своими файлами
+# (values-stage.yaml и далее values-prod.yaml).
+
+nameOverride: ''
+image:
+  registry: ghcr.io
+  # Заполняется владельцем репозитория на первом выкате (T-003).
+  repository: OWNER/auction
+  tag: '' # пусто → берётся appVersion чарта
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+# Секреты в чарт не кладутся и в git не попадают. Ожидается, что Secret уже
+# существует в неймспейсе — его создаёт CI или администратор:
+#
+#   kubectl create secret generic auction-secrets \
+#     --from-literal=DATABASE_URL=... --from-literal=DIRECT_URL=... \
+#     --from-literal=REDIS_URL=... \
+#     --from-literal=PII_ENCRYPTION_KEY=... --from-literal=PII_BLIND_INDEX_KEY=...
+secrets:
+  existingSecret: auction-secrets
+
+api:
+  enabled: true
+  replicaCount: 2
+  port: 3100
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  env:
+    NODE_ENV: production
+    LOG_PRETTY: 'false'
+
+web:
+  enabled: true
+  replicaCount: 2
+  port: 3101
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  env:
+    NODE_ENV: production
+
+# Приложение appears в T-020 (крон ЕРД) и T-027 (finisher торгов).
+# До этого момента деплоить нечего — включать нельзя.
+workers:
+  enabled: false
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+# Миграции накатываются перед стартом подов, а не приложением на старте:
+# иначе две реплики попытаются мигрировать одновременно.
+migrations:
+  enabled: true
+  backoffLimit: 2
+
+ingress:
+  enabled: true
+  className: nginx
+  host: stage.example.kz
+  tls:
+    enabled: true
+    secretName: auction-tls
+  # WebSocket-соединения живут десятками минут: дефолтные 60 секунд у NGINX
+  # рвали бы торги каждую минуту.
+  websocketTimeoutSeconds: 3600
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ['ALL']

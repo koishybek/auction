@@ -31,12 +31,13 @@ async function request<T>(path: string, timeoutMs = 5_000): Promise<ApiResult<T>
   }
 }
 
+// Весь REST под /api — тем же префиксом, что отдаёт ingress в проде.
 export function getLiveness(): Promise<ApiResult<LivenessReport>> {
-  return request<LivenessReport>('/health');
+  return request<LivenessReport>('/api/health');
 }
 
 export function getReadiness(): Promise<ApiResult<ReadinessReport>> {
-  return request<ReadinessReport>('/health/ready');
+  return request<ReadinessReport>('/api/health/ready');
 }
 
 export { API_BASE_URL };

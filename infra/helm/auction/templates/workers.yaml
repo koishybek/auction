@@ -1,0 +1,53 @@
+{{- if .Values.workers.enabled }}
+{{/*
+Воркеры BullMQ: finisher дедлайнов торгов, крон ЕРД 24 ч, SLA-возвраты, lockout.
+Приложение apps/workers появляется в T-020 и T-027 — до этого workers.enabled: false.
+
+Сервиса нет намеренно: воркеры ничего не слушают, они разбирают очередь.
+Реплик по умолчанию одна: finisher завершает торги, и его горизонтальное
+масштабирование требует отдельной защиты от двойного завершения (T-027).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "auction.fullname" . }}-workers
+  labels:
+    {{- include "auction.labels" . | nindent 4 }}
+    app.kubernetes.io/component: workers
+spec:
+  replicas: {{ .Values.workers.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: workers
+  template:
+    metadata:
+      labels:
+        {{- include "auction.labels" . | nindent 8 }}
+        app.kubernetes.io/component: workers
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Воркер должен успеть дописать текущую задачу, а не бросить её на середине.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: workers
+          image: {{ include "auction.image" (dict "Values" .Values "Chart" .Chart "component" "workers") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          envFrom:
+            {{- include "auction.secretEnv" . | nindent 12 }}
+          resources:
+            {{- toYaml .Values.workers.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

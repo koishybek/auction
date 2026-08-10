@@ -1,0 +1,6 @@
+apiVersion: v2
+name: auction
+description: Платформа «Цифровой гибридный аукцион скоростных продаж» — api, web, workers
+type: application
+version: 0.1.0
+appVersion: '0.0.0'

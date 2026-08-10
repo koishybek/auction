@@ -1,0 +1,20 @@
+Релиз {{ .Release.Name }} развёрнут в неймспейсе {{ .Release.Namespace }}.
+
+Адрес: {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}
+
+Проверить:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} logs job/{{ include "auction.fullname" . }}-migrate
+
+Здоровье API:
+  curl {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}/api/health
+  curl {{ if .Values.ingress.tls.enabled }}https{{ else }}http{{ end }}://{{ .Values.ingress.host }}/api/health/ready
+
+{{- if not .Values.workers.enabled }}
+
+Воркеры выключены: приложение apps/workers появится в T-020 и T-027.
+{{- end }}
+
+Секрет {{ .Values.secrets.existingSecret }} должен существовать заранее — чарт его
+не создаёт и не хранит. Если поды падают с ошибкой конфигурации, проверь:
+  kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secrets.existingSecret }}

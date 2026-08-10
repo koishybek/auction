@@ -35,7 +35,7 @@ export default async function HomePage() {
             <dd className="font-mono">{CONTRACT_VERSION}</dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-[var(--color-muted)]">GET /health</dt>
+            <dt className="text-[var(--color-muted)]">GET /api/health</dt>
             <dd className="font-mono">
               {liveness.ok ? (
                 <span className="text-[var(--color-up)]">
@@ -47,7 +47,7 @@ export default async function HomePage() {
             </dd>
           </div>
           <div className="flex justify-between gap-4">
-            <dt className="text-[var(--color-muted)]">GET /health/ready</dt>
+            <dt className="text-[var(--color-muted)]">GET /api/health/ready</dt>
             <dd className="font-mono">
               {readiness.ok ? (
                 <span

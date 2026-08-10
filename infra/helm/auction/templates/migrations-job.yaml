@@ -1,0 +1,56 @@
+{{- if .Values.migrations.enabled }}
+{{/*
+Миграции накатываются хуком ДО того, как поднимутся новые поды.
+
+Почему не на старте приложения: реплик несколько, и они полезут мигрировать
+одновременно. Prisma берёт advisory-лок, так что база не развалится, но поды
+будут ждать друг друга и падать по таймауту готовности. Отдельная Job проще
+и наблюдаемее.
+
+hook-delete-policy: старая Job удаляется перед созданием новой, иначе Kubernetes
+откажется пересоздавать неизменяемый объект.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "auction.fullname" . }}-migrate
+  labels:
+    {{- include "auction.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: '-5'
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "auction.labels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: Never
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "auction.image" (dict "Values" .Values "Chart" .Chart "component" "api") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          # deploy, а не dev: миграции применяются готовыми, новые не создаются.
+          # Ходит по DIRECT_URL — DDL и advisory-локи через пулер не работают.
+          command: ['pnpm', 'db:deploy']
+          envFrom:
+            {{- include "auction.secretEnv" . | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+{{- end }}

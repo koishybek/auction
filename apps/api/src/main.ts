@@ -21,6 +21,14 @@ async function bootstrap(): Promise<void> {
   app.useLogger(logger);
   app.useGlobalInterceptors(new LoggerErrorInterceptor());
 
+  /**
+   * Весь REST живёт под /api. Причина не косметическая: ingress отправляет в
+   * этот сервис префикс /api, а корень отдаёт web. Без префикса пришлось бы
+   * переписывать путь регулярками на стороне NGINX, и маршруты в dev и в проде
+   * разъехались бы — самый неприятный класс ошибок «на проде не работает».
+   */
+  app.setGlobalPrefix('api');
+
   // Валидирующий пайп живёт в AppModule через APP_PIPE — так он один и тот же
   // в проде и в e2e-тестах, которые поднимают модуль, а не main.ts.
 
@@ -45,8 +53,14 @@ async function bootstrap(): Promise<void> {
     .build();
   // cleanupOpenApiDoc обязателен: он превращает Zod-схемы DTO в корректные
   // схемы OpenAPI. Без него /docs отдаёт документ с пустыми телами запросов.
-  SwaggerModule.setup('docs', app, () =>
-    cleanupOpenApiDoc(SwaggerModule.createDocument(app, openApi)),
+  SwaggerModule.setup(
+    'docs',
+    app,
+    () => cleanupOpenApiDoc(SwaggerModule.createDocument(app, openApi)),
+    {
+      // Документация уезжает под тот же префикс, что и сами ручки: /api/docs.
+      useGlobalPrefix: true,
+    },
   );
 
   const port = config.get('API_PORT', { infer: true });
@@ -54,7 +68,7 @@ async function bootstrap(): Promise<void> {
 
   logger.log(
     { port, env: config.get('NODE_ENV', { infer: true }) },
-    `API слушает :${String(port)} — /health, /docs`,
+    `API слушает :${String(port)} — /api/health, /api/docs`,
   );
 }
 

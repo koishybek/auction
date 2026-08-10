@@ -1,0 +1,55 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "auction.fullname" . }}
+  labels:
+    {{- include "auction.labels" . | nindent 4 }}
+  annotations:
+    # WebSocket-соединения торгов живут десятками минут. Дефолтные 60 секунд
+    # у NGINX рвали бы их прямо посреди аукциона.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: {{ .Values.ingress.websocketTimeoutSeconds | quote }}
+    nginx.ingress.kubernetes.io/proxy-send-timeout: {{ .Values.ingress.websocketTimeoutSeconds | quote }}
+    # Sticky-сессии намеренно НЕ включены: gateway stateless, состояние торгов
+    # живёт в Redis, а события расходятся через pub/sub. Привязка к поду только
+    # мешала бы балансировке на 50 000 подключений (NFR-03).
+    nginx.ingress.kubernetes.io/affinity: ''
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- if .Values.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tls.secretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # Порядок важен: более специфичные префиксы идут раньше корня.
+          {{- if .Values.api.enabled }}
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "auction.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.port }}
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "auction.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.port }}
+          {{- end }}
+          {{- if .Values.web.enabled }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "auction.fullname" . }}-web
+                port:
+                  number: {{ .Values.web.port }}
+          {{- end }}
+{{- end }}

@@ -8,6 +8,10 @@ pnpm-lock.yaml
 # Сгенерирован из schema.prisma командой pnpm db:erd
 docs/ERD.md
 
+# Go-шаблоны Helm — это не YAML, Prettier на них падает.
+# Проверяются через helm lint / helm template.
+infra/helm/*/templates/
+
 # Документы заказчика и план — форматирование не наше, диффы должны оставаться читаемыми
 docs/TZ.md
 docs/DEVELOPMENT_PLAN.md
