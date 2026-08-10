@@ -4,7 +4,14 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.next/**', '**/coverage/**'],
+    // generated — клиент Prisma, его не мы пишем и не нам за него отвечать.
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.next/**',
+      '**/coverage/**',
+      '**/generated/**',
+    ],
   },
 
   js.configs.recommended,
@@ -15,7 +22,11 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // prisma.config.ts — конфиг инструмента, он вне include у apps/api:
+          // добавить его туда нельзя, иначе tsc потащит его в dist и сломает структуру.
+          allowDefaultProject: ['apps/api/prisma.config.ts'],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },

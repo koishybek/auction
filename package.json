@@ -18,6 +18,12 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:env": "pnpm --filter @auction/api check:env",
+    "db:generate": "pnpm --filter @auction/api db:generate",
+    "db:migrate": "pnpm --filter @auction/api db:migrate",
+    "db:deploy": "pnpm --filter @auction/api db:deploy",
+    "db:status": "pnpm --filter @auction/api db:status",
+    "db:studio": "pnpm --filter @auction/api db:studio",
+    "db:erd": "pnpm --filter @auction/api db:erd",
     "prepare": "husky"
   },
   "devDependencies": {

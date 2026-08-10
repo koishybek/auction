@@ -1,0 +1,465 @@
+// Схема БД v0 — сущности раздела 6 плана разработки.
+//
+// Соглашения:
+//   * Деньги — целые ТИЫНЫ (1 тенге = 100 тиын), тип BigInt → BIGINT. Суффикс полей
+//     `_tiyn`, а не `_kzt` как в наброске плана: единица измерения обязана быть видна
+//     в имени колонки. Денежные ошибки рождаются именно из «а это тенге или тиыны?».
+//   * ПДн (ФИО, ИИН, телефон, email) — только в зашифрованных колонках `*_enc` (Bytes).
+//     Шифрование и поиск по blind index реализует T-008.
+//   * В БД snake_case через @map, в коде camelCase.
+//   * `bids` и `audit_log` — append-only, UPDATE/DELETE запрещены триггером.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Пользователи ────────────────────────────────────────────────────────────
+
+enum UserRole {
+  INVESTOR
+  SELLER
+  PARTNER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  BLOCKED
+}
+
+model User {
+  id            String     @id @default(uuid()) @db.Uuid
+  roles         UserRole[]
+  status        UserStatus @default(ACTIVE)
+  egovVerifiedAt DateTime? @map("egov_verified_at") @db.Timestamptz(3)
+
+  // ПДн. Открытым текстом здесь не лежит ничего.
+  fioEnc   Bytes? @map("fio_enc")
+  iinEnc   Bytes? @map("iin_enc")
+  phoneEnc Bytes? @map("phone_enc")
+  emailEnc Bytes? @map("email_enc")
+
+  // Детерминированный HMAC от ИИН: позволяет искать пользователя по ИИН,
+  // не расшифровывая таблицу целиком (T-008).
+  iinBlindIdx String? @unique @map("iin_blind_idx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  lotsAsSeller     Lot[]              @relation("LotSeller")
+  bids             Bid[]
+  blindIds         BlindId[]
+  deposits         Deposit[]
+  paymentsAsWinner Payment[]
+  leadsAsPartner   PartnerLead[]
+  refBonuses       RefBonus[]
+  openHouseBookings OpenHouseBooking[]
+  notifications    Notification[]
+
+  @@index([status])
+  @@map("users")
+}
+
+// ─── Лоты ────────────────────────────────────────────────────────────────────
+
+enum LotType {
+  REALTY
+  VEHICLE
+}
+
+enum LotStatus {
+  DRAFT
+  MODERATION
+  PHASE_I
+  PHASE_II
+  PHASE_III
+  FINISHED
+  CLOSED
+  PAUSED
+  VETOED
+}
+
+model Lot {
+  id            String    @id @default(uuid()) @db.Uuid
+  type          LotType
+  cadastreOrVin String    @map("cadastre_or_vin")
+  status        LotStatus @default(DRAFT)
+
+  sellerId String @map("seller_id") @db.Uuid
+  seller   User   @relation("LotSeller", fields: [sellerId], references: [id])
+
+  partnerLeadId String?      @map("partner_lead_id") @db.Uuid
+  partnerLead   PartnerLead? @relation(fields: [partnerLeadId], references: [id])
+
+  // Деньги в тиынах. currentPrice ведёт Redis во время торгов; сюда попадает
+  // зафиксированное значение — PostgreSQL остаётся авторитетом для денег и аудита.
+  startPriceTiyn   BigInt  @map("start_price_tiyn")
+  currentPriceTiyn BigInt? @map("current_price_tiyn")
+
+  vetoDeadlineAt DateTime? @map("veto_deadline_at") @db.Timestamptz(3)
+  /// Цифровой карантин после ВЕТО: до этого момента лот заново не выставить (FR-17).
+  lockoutUntil   DateTime? @map("lockout_until") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  sessions        AuctionSession[]
+  bids            Bid[]
+  blindIds        BlindId[]
+  deposits        Deposit[]
+  payments        Payment[]
+  documents       LotDocument[]
+  openHouseSlots  OpenHouseSlot[]
+  registryChecks  RegistryCheck[]
+  refBonuses      RefBonus[]
+  leads           PartnerLead[]    @relation("LeadConvertedLot")
+
+  @@index([status])
+  @@index([type, status])
+  @@index([cadastreOrVin])
+  @@map("lots")
+}
+
+// ─── Торговая сессия ─────────────────────────────────────────────────────────
+
+enum SessionStatus {
+  RUNNING
+  FROZEN
+  FINISHED
+}
+
+model AuctionSession {
+  id    String @id @default(uuid()) @db.Uuid
+  lotId String @map("lot_id") @db.Uuid
+  lot   Lot    @relation(fields: [lotId], references: [id])
+
+  status    SessionStatus @default(RUNNING)
+  startedAt DateTime      @default(now()) @map("started_at") @db.Timestamptz(3)
+  /// Авторитетный дедлайн торгов. TTL ключа в Redis — только страховка (T-027).
+  deadlineAt DateTime     @map("deadline_at") @db.Timestamptz(3)
+  finishedAt DateTime?    @map("finished_at") @db.Timestamptz(3)
+
+  /// Снимок остатка таймера на момент SLA Freeze, мс (FR-08).
+  freezeSnapshotMs Int? @map("freeze_snapshot_ms")
+
+  winnerBidId   String? @unique @map("winner_bid_id") @db.Uuid
+  winnerBid     Bid?    @relation("SessionWinner", fields: [winnerBidId], references: [id])
+  protocolDocId String? @map("protocol_doc_id") @db.Uuid
+
+  bids Bid[] @relation("SessionBids")
+
+  @@index([lotId, status])
+  @@index([status, deadlineAt])
+  @@map("auction_sessions")
+}
+
+// ─── Ставки: append-only, источник аудита ────────────────────────────────────
+
+model Bid {
+  id        String         @id @default(uuid()) @db.Uuid
+  lotId     String         @map("lot_id") @db.Uuid
+  lot       Lot            @relation(fields: [lotId], references: [id])
+  sessionId String         @map("session_id") @db.Uuid
+  session   AuctionSession @relation("SessionBids", fields: [sessionId], references: [id])
+  userId    String         @map("user_id") @db.Uuid
+  user      User           @relation(fields: [userId], references: [id])
+
+  amountTiyn BigInt @map("amount_tiyn")
+  /// Номер ставки в сессии. Присваивается атомарно в Lua-скрипте (T-024).
+  seq        Int
+  /// Псевдоним участника в этом лоте — в ленте не должно быть реальных ID (FR-09).
+  blindCode  String @map("blind_code")
+  /// Только серверное время. Часы клиента не участвуют ни в чём (NFR-04).
+  serverTs   DateTime @default(now()) @map("server_ts") @db.Timestamptz(3)
+
+  wonSession AuctionSession? @relation("SessionWinner")
+
+  // Страховка от гонок на уровне БД (R-4): двух ставок с одним seq в сессии
+  // не существует физически, даже если что-то пробьётся мимо Lua-скрипта.
+  @@unique([sessionId, seq])
+  @@index([lotId, seq])
+  @@index([userId])
+  @@map("bids")
+}
+
+// ─── Blind ID ────────────────────────────────────────────────────────────────
+
+model BlindId {
+  id     String @id @default(uuid()) @db.Uuid
+  lotId  String @map("lot_id") @db.Uuid
+  lot    Lot    @relation(fields: [lotId], references: [id])
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+  /// Например «704» из «Инвестор #704». Уникален в рамках лота, между лотами меняется.
+  code   String
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([lotId, userId])
+  @@unique([lotId, code])
+  @@map("blind_ids")
+}
+
+// ─── Задатки 10 % ────────────────────────────────────────────────────────────
+
+enum DepositStatus {
+  PENDING
+  HELD
+  ON_SPECIAL_ACCOUNT
+  RUNNERUP_HOLD
+  REFUND_PENDING
+  REFUNDED
+  FORFEITED
+}
+
+model Deposit {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+  lotId  String @map("lot_id") @db.Uuid
+  lot    Lot    @relation(fields: [lotId], references: [id])
+
+  amountTiyn BigInt        @map("amount_tiyn")
+  status     DepositStatus @default(PENDING)
+  /// SLA 24 ч на авто-возврат проигравшим (FR-12).
+  refundDeadlineAt DateTime? @map("refund_deadline_at") @db.Timestamptz(3)
+  bankRef    String?       @map("bank_ref")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Один задаток на пару «участник + лот».
+  @@unique([userId, lotId])
+  @@index([status, refundDeadlineAt])
+  @@map("deposits")
+}
+
+// ─── Доплата 90 % и расщепление ──────────────────────────────────────────────
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+model Payment {
+  id            String @id @default(uuid()) @db.Uuid
+  lotId         String @map("lot_id") @db.Uuid
+  lot           Lot    @relation(fields: [lotId], references: [id])
+  winnerUserId  String @map("winner_user_id") @db.Uuid
+  winner        User   @relation(fields: [winnerUserId], references: [id])
+
+  amountTiyn BigInt        @map("amount_tiyn")
+  status     PaymentStatus @default(PENDING)
+  bankRef    String?       @map("bank_ref")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  splits PayoutSplit[]
+
+  @@index([status])
+  @@map("payments")
+}
+
+enum PayoutKind {
+  FEE_5PCT
+  BANK_DEBT
+  SELLER_REST
+}
+
+enum PayoutStatus {
+  PENDING
+  SENT
+  CONFIRMED
+  FAILED
+}
+
+model PayoutSplit {
+  id        String  @id @default(uuid()) @db.Uuid
+  paymentId String  @map("payment_id") @db.Uuid
+  payment   Payment @relation(fields: [paymentId], references: [id])
+
+  kind       PayoutKind
+  amountTiyn BigInt       @map("amount_tiyn")
+  status     PayoutStatus @default(PENDING)
+  bankRef    String?      @map("bank_ref")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  // Повторный вебхук банка не должен породить второе поручение того же вида (T-046).
+  @@unique([paymentId, kind])
+  @@map("payout_splits")
+}
+
+// ─── Партнёры: лиды и бонусы ─────────────────────────────────────────────────
+
+enum LeadStatus {
+  FREE_CHECKED
+  LOCKED
+  EXPIRED
+  CONVERTED
+}
+
+model PartnerLead {
+  id        String @id @default(uuid()) @db.Uuid
+  partnerId String @map("partner_id") @db.Uuid
+  partner   User   @relation(fields: [partnerId], references: [id])
+
+  /// Контакты собственника — ПДн, только в зашифрованном виде.
+  ownerContactEnc Bytes  @map("owner_contact_enc")
+  cadastreOrVin   String @map("cadastre_or_vin")
+
+  status      LeadStatus @default(FREE_CHECKED)
+  /// Закрепление за партнёром на 90 дней (FR-18).
+  lockedUntil DateTime?  @map("locked_until") @db.Timestamptz(3)
+
+  lotId String? @map("lot_id") @db.Uuid
+  lot   Lot?    @relation("LeadConvertedLot", fields: [lotId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  convertedLots Lot[]
+
+  @@index([cadastreOrVin, status])
+  @@index([status, lockedUntil])
+  @@map("partner_leads")
+}
+
+enum RefBonusStatus {
+  FORECAST
+  ACCRUED
+  PAID
+}
+
+model RefBonus {
+  id        String @id @default(uuid()) @db.Uuid
+  partnerId String @map("partner_id") @db.Uuid
+  partner   User   @relation(fields: [partnerId], references: [id])
+  lotId     String @map("lot_id") @db.Uuid
+  lot       Lot    @relation(fields: [lotId], references: [id])
+
+  amountTiyn BigInt         @map("amount_tiyn")
+  status     RefBonusStatus @default(FORECAST)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  @@unique([partnerId, lotId])
+  @@map("ref_bonuses")
+}
+
+// ─── Документы, показы, реестры ──────────────────────────────────────────────
+
+enum DocumentKind {
+  DATA_ROOM
+  CERT_STO
+  PROTOCOL
+  VETO_ACT
+}
+
+model LotDocument {
+  id    String @id @default(uuid()) @db.Uuid
+  lotId String @map("lot_id") @db.Uuid
+  lot   Lot    @relation(fields: [lotId], references: [id])
+
+  kind           DocumentKind
+  fileKey        String       @map("file_key")
+  downloadsCount Int          @default(0) @map("downloads_count")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([lotId, kind])
+  @@map("lot_documents")
+}
+
+model OpenHouseSlot {
+  id     String   @id @default(uuid()) @db.Uuid
+  lotId  String   @map("lot_id") @db.Uuid
+  lot    Lot      @relation(fields: [lotId], references: [id])
+  slotAt DateTime @map("slot_at") @db.Timestamptz(3)
+
+  bookings OpenHouseBooking[]
+
+  @@unique([lotId, slotAt])
+  @@map("open_house_slots")
+}
+
+model OpenHouseBooking {
+  id     String        @id @default(uuid()) @db.Uuid
+  slotId String        @map("slot_id") @db.Uuid
+  slot   OpenHouseSlot @relation(fields: [slotId], references: [id])
+  userId String        @map("user_id") @db.Uuid
+  user   User          @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([slotId, userId])
+  @@map("open_house_bookings")
+}
+
+model RegistryCheck {
+  id    String @id @default(uuid()) @db.Uuid
+  lotId String @map("lot_id") @db.Uuid
+  lot   Lot    @relation(fields: [lotId], references: [id])
+
+  checkedAt      DateTime @default(now()) @map("checked_at") @db.Timestamptz(3)
+  /// Ответ КИСИП/ЕРД: true → лот уходит в PAUSED (INT-02).
+  hasRestriction Boolean  @map("has_restriction")
+  payloadJson    Json     @map("payload_json")
+
+  @@index([lotId, checkedAt])
+  @@map("registry_checks")
+}
+
+// ─── Уведомления и аудит ─────────────────────────────────────────────────────
+
+enum NotificationChannel {
+  PUSH
+  SMS
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model Notification {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id])
+
+  channel  NotificationChannel
+  template String
+  status   NotificationStatus  @default(PENDING)
+  sentAt   DateTime?           @map("sent_at") @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("notifications")
+}
+
+/// Append-only журнал действий. UPDATE и DELETE запрещены триггером.
+model AuditLog {
+  id          String   @id @default(uuid()) @db.Uuid
+  actor       String?
+  action      String
+  entity      String
+  entityId    String?  @map("entity_id")
+  payloadJson Json     @map("payload_json")
+  serverTs    DateTime @default(now()) @map("server_ts") @db.Timestamptz(3)
+
+  @@index([entity, entityId])
+  @@index([serverTs])
+  @@map("audit_log")
+}

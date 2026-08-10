@@ -2,7 +2,11 @@ dist/
 node_modules/
 .next/
 coverage/
+generated/
 pnpm-lock.yaml
+
+# Сгенерирован из schema.prisma командой pnpm db:erd
+docs/ERD.md
 
 # Документы заказчика и план — форматирование не наше, диффы должны оставаться читаемыми
 docs/TZ.md
