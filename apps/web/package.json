@@ -3,15 +3,27 @@
   "version": "0.0.0",
   "private": true,
   "description": "Next.js SSR: каталог, аукционный зал, ЛК Инвестора/Продавца/Партнёра",
-  "main": "dist/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "next build",
+    "dev": "next dev -p 3101",
+    "start": "next start -p 3101",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@auction/shared": "workspace:*"
+    "@auction/shared": "workspace:*",
+    "next": "^16.3.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "dotenv": "^17.4.2",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3"
   }
 }

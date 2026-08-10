@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+
+/* Tailwind v4: тема задаётся здесь, отдельного tailwind.config.js больше нет. */
+@theme {
+  --color-ink: #0d1117;
+  --color-ink-soft: #1c2230;
+  --color-muted: #8b94a7;
+  --color-line: #262d3d;
+  --color-accent: #f0b429;
+  --color-up: #35c07f;
+  --color-down: #e0524a;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ink);
+  color: #e8ecf4;
+}

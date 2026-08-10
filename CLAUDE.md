@@ -87,7 +87,10 @@ auction/
 │   │   ├── partners/            лиды, закрепление 90 дней, бонусы
 │   │   ├── notifications/       push/SMS через адаптер
 │   │   └── documents/           протокол торгов, Акт ВЕТО (PDF), S3
-│   └── web/               Next.js SSR: каталог, аукционный зал, три ЛК, админка-минимум
+│   └── web/               Next.js (App Router, SSR) + Tailwind v4 + Zustand
+│       ├── src/app/             роуты и layout
+│       ├── src/lib/             клиент API, типы из @auction/shared
+│       └── src/store/           Zustand-сторы
 ├── packages/
 │   └── shared/            типы WS-событий, DTO, money-утилиты — общие для api и web
 ├── apps/gateway/    (план)  stateless WS-сервер: комнаты lot:{id}, heartbeat, ресинк

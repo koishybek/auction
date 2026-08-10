@@ -1,3 +1,4 @@
+import type { DependencyReport, DependencyStatus, ReadinessReport } from '@auction/shared';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
@@ -5,18 +6,7 @@ import { Client } from 'pg';
 
 import type { Env } from '../config/env.schema';
 
-export type DependencyStatus = 'up' | 'down';
-
-export interface DependencyReport {
-  readonly status: DependencyStatus;
-  readonly latencyMs: number | null;
-  readonly error?: string;
-}
-
-export interface ReadinessReport {
-  readonly status: DependencyStatus;
-  readonly dependencies: Readonly<Record<string, DependencyReport>>;
-}
+// Типы ответа живут в @auction/shared: api их реализует, web потребляет.
 
 /**
  * Проба не должна висеть: kubelet ждёт ответа считаные секунды, а зависшая

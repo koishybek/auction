@@ -5,9 +5,10 @@ import {
   ApiServiceUnavailableResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import type { LivenessReport, ReadinessReport } from '@auction/shared';
 import type { Response } from 'express';
 
-import { HealthService, type ReadinessReport } from './health.service';
+import { HealthService } from './health.service';
 
 @ApiTags('health')
 @Controller('health')
@@ -23,7 +24,7 @@ export class HealthController {
   @Get()
   @ApiOperation({ summary: 'Liveness: процесс жив' })
   @ApiOkResponse({ description: 'Процесс отвечает' })
-  live(): { status: 'ok'; uptimeSec: number } {
+  live(): LivenessReport {
     return { status: 'ok', uptimeSec: Math.floor(process.uptime()) };
   }
 
