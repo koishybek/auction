@@ -31,3 +31,7 @@ export interface CurrentUserView {
   readonly status: 'ACTIVE' | 'BLOCKED';
   readonly egovVerified: boolean;
 }
+
+/** Ответ на завершение eGov-флоу: либо ещё ждём подтверждения, либо вход состоялся. */
+export type EgovLoginResult =
+  { readonly status: 'PENDING' } | { readonly status: 'COMPLETED'; readonly tokens: TokenPair };

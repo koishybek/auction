@@ -1,6 +1,8 @@
-import type { CurrentUserView, TokenPair, UserRole } from '@auction/shared';
+import type { CurrentUserView, EgovLoginResult, TokenPair, UserRole } from '@auction/shared';
 import {
+  ConflictException,
   ForbiddenException,
+  Inject,
   Injectable,
   Logger,
   NotFoundException,
@@ -8,7 +10,14 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
+import { PiiCryptoService } from '../common/crypto/pii-crypto.service';
 import type { Env } from '../config/env.schema';
+import { EgovMockProvider } from '../integrations/egov/egov.mock.provider';
+import {
+  EGOV_PROVIDER,
+  type EgovInitResult,
+  type EgovProvider,
+} from '../integrations/egov/egov.types';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
@@ -29,9 +38,67 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly tokens: TokenService,
     private readonly time: TimeService,
+    private readonly pii: PiiCryptoService,
+    @Inject(EGOV_PROVIDER) private readonly egov: EgovProvider,
     config: ConfigService<Env, true>,
   ) {
     this.isProduction = config.get('NODE_ENV', { infer: true }) === 'production';
+  }
+
+  /** Начало QR-флоу eGov. */
+  egovInit(): Promise<EgovInitResult> {
+    return this.egov.initQr();
+  }
+
+  /**
+   * Завершение QR-флоу: обмен подтверждённой eGov-сессии на токены платформы.
+   *
+   * Пользователь ищется по blind index ИИН — расшифровка таблицы не нужна.
+   * Первый вход создаёт запись с ролью INVESTOR (допущение: продавца и партнёра
+   * назначает админ, ТЗ порядок выдачи ролей не описывает — ОВ-8).
+   * ПДн из eGov перезаписываются при каждом входе: источник истины — госсистема.
+   */
+  async egovComplete(sessionId: string, meta: SessionMeta): Promise<EgovLoginResult> {
+    const state = await this.egov.check(sessionId);
+    if (state.status === 'PENDING') {
+      return { status: 'PENDING' };
+    }
+    if (state.status !== 'APPROVED') {
+      // EXPIRED / DENIED / CONSUMED — для клиента исход один: флоу не удался,
+      // нужен новый QR. Детали различаются кодом.
+      throw new ConflictException({
+        code: state.status === 'DENIED' ? 'EGOV_DENIED' : 'EGOV_SESSION_INVALID',
+      });
+    }
+
+    const identity = await this.egov.consume(sessionId);
+    if (identity === null) {
+      // Гонка двух complete по одной сессии: consume атомарен, второй получает отказ.
+      throw new ConflictException({ code: 'EGOV_SESSION_INVALID' });
+    }
+
+    const iinIndex = this.pii.index(identity.iin);
+    const now = new Date(this.time.wallClockMs());
+
+    const existing = await this.prisma.user.findUnique({ where: { iinBlindIdx: iinIndex } });
+    if (existing?.status === 'BLOCKED') {
+      throw new ForbiddenException({ code: AUTH_ERROR.USER_BLOCKED });
+    }
+
+    const piiData = {
+      fioEnc: this.pii.encrypt(identity.fio, 'users.fio'),
+      iinEnc: this.pii.encrypt(identity.iin, 'users.iin'),
+      egovVerifiedAt: now,
+    };
+
+    const user = existing
+      ? await this.prisma.user.update({ where: { id: existing.id }, data: piiData })
+      : await this.prisma.user.create({
+          data: { roles: ['INVESTOR'], iinBlindIdx: iinIndex, ...piiData },
+        });
+
+    const tokens = await this.issueTokens(user.id, user.roles, crypto.randomUUID(), meta);
+    return { status: 'COMPLETED', tokens };
   }
 
   /**
@@ -54,6 +121,35 @@ export class AuthService {
 
     const user = await this.prisma.user.create({ data: { roles: [...roles] } });
     return this.issueTokens(user.id, roles, crypto.randomUUID(), meta);
+  }
+
+  /**
+   * Решение «гражданина» в мок-флоу. Вне production; с реальным адаптером
+   * эта ручка исчезает вместе с моком.
+   */
+  egovDevDecide(input: {
+    sessionId: string;
+    iin: string;
+    fio: string;
+    biometricConfirmed: boolean;
+    deny: boolean;
+  }): boolean {
+    if (this.isProduction) {
+      this.logger.error('Попытка вызвать egov dev-approve в production');
+      throw new NotFoundException('Ручка недоступна');
+    }
+    const mock = this.egov;
+    if (!(mock instanceof EgovMockProvider)) {
+      throw new NotFoundException('Ручка доступна только с мок-провайдером eGov');
+    }
+    if (input.deny) {
+      return mock.deny(input.sessionId);
+    }
+    return mock.approve(input.sessionId, {
+      iin: input.iin,
+      fio: input.fio,
+      biometricConfirmed: input.biometricConfirmed,
+    });
   }
 
   /**

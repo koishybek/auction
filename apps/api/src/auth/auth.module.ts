@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 
+import { EgovModule } from '../integrations/egov/egov.module';
+
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './jwt-auth.guard';
@@ -17,7 +19,7 @@ import { TokenService } from './token.service';
  * что однажды кто-то забудет декоратор и выставит наружу лишнее.
  */
 @Module({
-  imports: [JwtModule.register({})],
+  imports: [JwtModule.register({}), EgovModule],
   controllers: [AuthController],
   providers: [
     AuthService,

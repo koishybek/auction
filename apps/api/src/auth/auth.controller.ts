@@ -1,9 +1,16 @@
-import { USER_ROLES, type CurrentUserView, type TokenPair } from '@auction/shared';
+import {
+  USER_ROLES,
+  type CurrentUserView,
+  type EgovLoginResult,
+  type TokenPair,
+} from '@auction/shared';
 import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
+
+import type { EgovInitResult } from '../integrations/egov/egov.types';
 
 import { AuthService } from './auth.service';
 import type { AuthenticatedUser } from './auth.types';
@@ -21,8 +28,31 @@ const RefreshSchema = z
   })
   .strict();
 
+const EgovCompleteSchema = z
+  .object({
+    sessionId: z.uuid(),
+  })
+  .strict();
+
+/**
+ * Тело dev-approve. ИИН — 12 цифр, как настоящий: мок должен гонять те же
+ * данные, что боевой eGov, иначе тесты пройдут на том, чего не бывает.
+ */
+const EgovDevApproveSchema = z
+  .object({
+    sessionId: z.uuid(),
+    iin: z.string().regex(/^\d{12}$/, 'ИИН — ровно 12 цифр'),
+    fio: z.string().min(1).max(300),
+    biometricConfirmed: z.boolean().default(false),
+    /** true — эмулировать отказ гражданина вместо подтверждения. */
+    deny: z.boolean().default(false),
+  })
+  .strict();
+
 class DevLoginDto extends createZodDto(DevLoginSchema) {}
 class RefreshDto extends createZodDto(RefreshSchema) {}
+class EgovCompleteDto extends createZodDto(EgovCompleteSchema) {}
+class EgovDevApproveDto extends createZodDto(EgovDevApproveSchema) {}
 
 @ApiTags('auth')
 @Controller('auth')
@@ -33,9 +63,44 @@ export class AuthController {
   @Public()
   @Post('dev-login')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Вход-заглушка (только вне production; настоящий eGov — T-012)' })
+  @ApiOperation({ summary: 'Вход-заглушка с произвольными ролями (только вне production)' })
   devLogin(@Body() body: DevLoginDto, @Req() req: Request): Promise<TokenPair> {
     return this.auth.devLogin(body.roles, metaOf(req));
+  }
+
+  /** Шаг 1 eGov-флоу: получить QR. План задаёт этот контракт в разделе 7. */
+  @Public()
+  @Post('egov/init')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'eGov: начать QR-флоу' })
+  egovInit(): Promise<EgovInitResult> {
+    return this.auth.egovInit();
+  }
+
+  /**
+   * Шаг 2: обмен подтверждённой сессии на токены. Клиент опрашивает ручку,
+   * пока статус PENDING. POST, а не GET из плана: обмен мутирует состояние,
+   * а GET с побочными эффектами кэшируется и ретраится прокси.
+   */
+  @Public()
+  @Post('egov/complete')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'eGov: завершить флоу (опрашивать при PENDING)' })
+  egovComplete(@Body() body: EgovCompleteDto, @Req() req: Request): Promise<EgovLoginResult> {
+    return this.auth.egovComplete(body.sessionId, metaOf(req));
+  }
+
+  /**
+   * Эмуляция подтверждения в eGov Mobile. Существует потому, что настоящего
+   * eGov нет (R-1): кто-то должен сыграть роль гражданина со смартфоном.
+   * В production — 404, как и dev-login.
+   */
+  @Public()
+  @Post('egov/dev-approve')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'eGov-мок: эмулировать решение гражданина (только вне production)' })
+  egovDevApprove(@Body() body: EgovDevApproveDto): { ok: boolean } {
+    return { ok: this.auth.egovDevDecide(body) };
   }
 
   @Public()

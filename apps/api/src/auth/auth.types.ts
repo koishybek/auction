@@ -6,6 +6,8 @@ export interface AuthenticatedUser {
   readonly roles: readonly UserRole[];
   /** id сессии: по нему можно погасить конкретный вход, не трогая остальные. */
   readonly sessionId: string;
+  /** Верифицирован через eGov. Читается из БД тем же запросом, что и роли. */
+  readonly egovVerified: boolean;
 }
 
 /** Коды отказов авторизации. Клиент различает их, чтобы понять, что делать дальше. */
@@ -20,6 +22,8 @@ export const AUTH_ERROR = {
   FORBIDDEN_ROLE: 'FORBIDDEN_ROLE',
   /** Предъявлен уже использованный refresh — признак кражи, семейство погашено. */
   REFRESH_REUSED: 'REFRESH_REUSED',
+  /** Действие требует верификации через eGov (FR-03: без неё нет допуска к деньгам). */
+  EGOV_NOT_VERIFIED: 'EGOV_NOT_VERIFIED',
 } as const;
 
 export type AuthErrorCode = (typeof AUTH_ERROR)[keyof typeof AUTH_ERROR];

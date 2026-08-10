@@ -28,12 +28,22 @@ export class PiiCryptoService {
     );
   }
 
-  encrypt(plaintext: string, purpose: PiiPurpose): Buffer {
-    return encryptPii(plaintext, this.encryptionKey, purpose);
+  /**
+   * Возвращает тип, который Prisma принимает в колонку Bytes
+   * (`Uint8Array<ArrayBuffer>`). Копия небольшая — ПДн короткие, зато
+   * конвертация живёт в одной точке, а не у каждого вызова записи.
+   */
+  encrypt(plaintext: string, purpose: PiiPurpose): Uint8Array<ArrayBuffer> {
+    return new Uint8Array(encryptPii(plaintext, this.encryptionKey, purpose));
   }
 
-  decrypt(blob: Buffer, purpose: PiiPurpose): string {
-    return decryptPii(blob, this.encryptionKey, purpose);
+  /** Принимает то, что Prisma отдаёт из колонки Bytes. Buffer.from здесь без копии. */
+  decrypt(blob: Uint8Array, purpose: PiiPurpose): string {
+    return decryptPii(
+      Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength),
+      this.encryptionKey,
+      purpose,
+    );
   }
 
   /** Индекс для поиска по ИИН — им заполняется колонка `users.iin_blind_idx`. */
@@ -45,7 +55,7 @@ export class PiiCryptoService {
   encryptSearchable(
     plaintext: string,
     purpose: PiiPurpose,
-  ): { readonly encrypted: Buffer; readonly index: string } {
+  ): { readonly encrypted: Uint8Array<ArrayBuffer>; readonly index: string } {
     return { encrypted: this.encrypt(plaintext, purpose), index: this.index(plaintext) };
   }
 }
