@@ -8,8 +8,12 @@ import {
 import type { LivenessReport, ReadinessReport } from '@auction/shared';
 import type { Response } from 'express';
 
+import { Public } from '../auth/decorators';
+
 import { HealthService } from './health.service';
 
+// Пробы Kubernetes ходят без токена — иначе kubelet получит 401 и убьёт под.
+@Public()
 @ApiTags('health')
 @Controller('health')
 export class HealthController {

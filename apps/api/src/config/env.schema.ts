@@ -48,6 +48,10 @@ const key32 = (label: string) =>
     },
   );
 
+/** Длительность вида 15m, 30d, 3600s — тот же формат, что понимает parseDuration. */
+const duration = (label: string) =>
+  z.string().regex(/^\d+\s*(ms|s|m|h|d)$/, `${label}: ожидается длительность вида 15m, 30d, 3600s`);
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -64,6 +68,24 @@ export const envSchema = z.object({
    * и его утечка компрометирует поиск, но не сами данные.
    */
   PII_BLIND_INDEX_KEY: key32('PII_BLIND_INDEX_KEY'),
+
+  /**
+   * Секреты подписи JWT. Разные для access и refresh: иначе access-токен,
+   * утёкший из лога или браузера, годился бы и на обновление сессии.
+   */
+  JWT_ACCESS_SECRET: z
+    .string()
+    .min(32, 'JWT_ACCESS_SECRET: минимум 32 символа, иначе подпись подбирается'),
+  JWT_REFRESH_SECRET: z
+    .string()
+    .min(32, 'JWT_REFRESH_SECRET: минимум 32 символа, иначе подпись подбирается'),
+
+  /**
+   * Access живёт коротко: отозвать выданный JWT нельзя, только дождаться истечения.
+   * Формат проверяем на старте — опечатка «15min» иначе всплыла бы при первом входе.
+   */
+  JWT_ACCESS_TTL: duration('JWT_ACCESS_TTL').default('15m'),
+  JWT_REFRESH_TTL: duration('JWT_REFRESH_TTL').default('30d'),
 
   /** Читаемые логи вместо JSON. Только для локальной отладки: в CI и проде — JSON. */
   LOG_PRETTY: z

@@ -20,6 +20,8 @@ interface ErrorBody {
   readonly path: string;
   readonly requestId: string | undefined;
   readonly timestamp: string;
+  /** Машиночитаемый код: по нему клиент решает, что делать (войти заново, показать капчу…). */
+  readonly code?: string;
 }
 
 /**
@@ -42,12 +44,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const status =
       exception instanceof HttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
 
+    const code = this.codeFor(exception);
     const body: ErrorBody = {
       statusCode: status,
       message: this.messageFor(exception, status),
       path: request.url,
       requestId: request.id,
       timestamp: new Date().toISOString(),
+      ...(code === undefined ? {} : { code }),
     };
 
     // 5xx — наша вина, нужен стек. 4xx — вина запроса, стек только шумит.
@@ -58,6 +62,22 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     httpAdapter.reply(response, body, status);
+  }
+
+  /**
+   * Достаёт машиночитаемый код из HttpException, брошенного как
+   * `new ForbiddenException({ code: '...' })`.
+   *
+   * Без этого код терялся: Nest кладёт объект в response, а наружу по умолчанию
+   * уходит только текст вроде «Forbidden Exception» — клиент не может отличить
+   * «войди заново» от «ты заблокирован».
+   */
+  private codeFor(exception: unknown): string | undefined {
+    if (!(exception instanceof HttpException)) return undefined;
+    const payload = exception.getResponse();
+    if (typeof payload !== 'object' || payload === null) return undefined;
+    const code = (payload as { code?: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
   }
 
   private messageFor(exception: unknown, status: number): string | readonly string[] {

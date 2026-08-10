@@ -11,7 +11,10 @@
 
 generator client {
   provider = "prisma-client"
-  output   = "../generated/prisma"
+  // Внутрь src намеренно: rootDir у tsc — это src, и импорт из соседнего
+  // каталога уронил бы сборку («не под rootDir»). Каталог в .gitignore,
+  // пересобирается на pnpm build.
+  output   = "../src/generated/prisma"
 }
 
 datasource db {
@@ -51,6 +54,7 @@ model User {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
+  authSessions     AuthSession[]
   lotsAsSeller     Lot[]              @relation("LotSeller")
   bids             Bid[]
   blindIds         BlindId[]
@@ -63,6 +67,37 @@ model User {
 
   @@index([status])
   @@map("users")
+}
+
+/// Сессия входа: одна запись на один выданный refresh-токен.
+model AuthSession {
+  id     String @id @default(uuid()) @db.Uuid
+  userId String @map("user_id") @db.Uuid
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 от refresh-токена. Сам токен не хранится: утечка дампа БД
+  /// не должна давать возможности войти.
+  refreshTokenHash String @unique @map("refresh_token_hash")
+
+  /// Цепочка ротаций одного входа. Повторное предъявление уже использованного
+  /// токена означает кражу — гасится всё семейство разом, а не одна запись.
+  familyId String @map("family_id") @db.Uuid
+
+  expiresAt DateTime  @map("expires_at") @db.Timestamptz(3)
+  /// Проставляется при ротации: по нему видно, что токен уже потрачен.
+  rotatedAt DateTime? @map("rotated_at") @db.Timestamptz(3)
+  revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+
+  /// Для разбора инцидентов: с какого клиента и адреса выдан токен.
+  userAgent String? @map("user_agent")
+  ip        String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
 }
 
 // ─── Лоты ────────────────────────────────────────────────────────────────────

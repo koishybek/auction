@@ -25,7 +25,13 @@ export default tseslint.config(
         projectService: {
           // Конфиги инструментов вне include у apps/api: добавить их туда нельзя,
           // иначе tsc потащит их в dist и сломает структуру сборки.
-          allowDefaultProject: ['apps/api/prisma.config.ts', 'apps/api/vitest.config.mts'],
+          // Тесты покрыты собственным apps/api/test/tsconfig.json — projectService
+          // берёт ближайший tsconfig.json.
+          allowDefaultProject: [
+            'apps/api/prisma.config.ts',
+            'apps/api/vitest.config.mts',
+            'apps/api/vitest.config.e2e.mts',
+          ],
         },
         tsconfigRootDir: import.meta.dirname,
       },

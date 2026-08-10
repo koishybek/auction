@@ -1,15 +1,12 @@
 // Обязан идти первым: без него декораторы Nest не находят метаданные типов и DI падает.
 import 'reflect-metadata';
 
-import { HttpAdapterHost, NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import type { Application } from 'express';
+import { NestFactory } from '@nestjs/core';
 import { Logger, LoggerErrorInterceptor } from 'nestjs-pino';
-import { cleanupOpenApiDoc } from 'nestjs-zod';
 
 import { AppModule } from './app.module';
-import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { configureApp, setupOpenApi } from './app.setup';
 import type { Env } from './config/env.schema';
 
 async function bootstrap(): Promise<void> {
@@ -21,48 +18,10 @@ async function bootstrap(): Promise<void> {
   app.useLogger(logger);
   app.useGlobalInterceptors(new LoggerErrorInterceptor());
 
-  /**
-   * Весь REST живёт под /api. Причина не косметическая: ingress отправляет в
-   * этот сервис префикс /api, а корень отдаёт web. Без префикса пришлось бы
-   * переписывать путь регулярками на стороне NGINX, и маршруты в dev и в проде
-   * разъехались бы — самый неприятный класс ошибок «на проде не работает».
-   */
-  app.setGlobalPrefix('api');
-
-  // Валидирующий пайп живёт в AppModule через APP_PIPE — так он один и тот же
-  // в проде и в e2e-тестах, которые поднимают модуль, а не main.ts.
-
-  app.useGlobalFilters(new AllExceptionsFilter(app.get(HttpAdapterHost), logger));
-
-  // Без этого под в Kubernetes умирает по SIGTERM, обрывая запросы на полуслове.
-  app.enableShutdownHooks();
-
-  // Не сообщаем внешнему миру, на чём работаем: бесплатная подсказка для сканеров.
-  // getInstance() возвращает any — сужаем до Application, иначе весь вызов
-  // становится небезопасным по типам (правило no-unsafe-call).
-  const expressApp = app.getHttpAdapter().getInstance() as Application;
-  expressApp.disable('x-powered-by');
+  configureApp(app);
+  setupOpenApi(app);
 
   const config = app.get(ConfigService<Env, true>);
-
-  const openApi = new DocumentBuilder()
-    .setTitle('Цифровой гибридный аукцион скоростных продаж — API')
-    .setDescription('REST-контур платформы. Real-time торги идут по WebSocket, см. docs/')
-    .setVersion('0.0.0')
-    .addBearerAuth()
-    .build();
-  // cleanupOpenApiDoc обязателен: он превращает Zod-схемы DTO в корректные
-  // схемы OpenAPI. Без него /docs отдаёт документ с пустыми телами запросов.
-  SwaggerModule.setup(
-    'docs',
-    app,
-    () => cleanupOpenApiDoc(SwaggerModule.createDocument(app, openApi)),
-    {
-      // Документация уезжает под тот же префикс, что и сами ручки: /api/docs.
-      useGlobalPrefix: true,
-    },
-  );
-
   const port = config.get('API_PORT', { infer: true });
   await app.listen(port);
 
