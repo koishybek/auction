@@ -1,0 +1,17 @@
+{
+  "name": "@auction/web",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Next.js SSR: каталог, аукционный зал, ЛК Инвестора/Продавца/Партнёра",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@auction/shared": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

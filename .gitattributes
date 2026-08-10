@@ -1,0 +1,14 @@
+# Нормализуем переводы строк: в репозитории всегда LF.
+# Иначе Windows-дев и Linux-CI дают шумные диффы и ломают shell-скрипты в образах.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+
+pnpm-lock.yaml linguist-generated=true -diff

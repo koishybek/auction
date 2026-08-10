@@ -1,0 +1,16 @@
+{
+  "name": "@auction/shared",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Общие типы WS-событий, DTO и денежные примитивы для api и web",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
