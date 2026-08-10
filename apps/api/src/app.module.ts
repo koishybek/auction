@@ -7,12 +7,14 @@ import { APP_PIPE } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodValidationPipe } from 'nestjs-zod';
 
+import { AdminModule } from './admin/admin.module';
 import { AuthModule } from './auth/auth.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { validateEnv, type Env } from './config/env.schema';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { TimeModule } from './time/time.module';
+import { UsersModule } from './users/users.module';
 
 @Module({
   imports: [
@@ -77,6 +79,8 @@ import { TimeModule } from './time/time.module';
     CryptoModule,
     TimeModule,
     AuthModule,
+    UsersModule,
+    AdminModule,
     HealthModule,
   ],
 

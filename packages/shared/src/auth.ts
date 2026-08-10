@@ -35,3 +35,19 @@ export interface CurrentUserView {
 /** Ответ на завершение eGov-флоу: либо ещё ждём подтверждения, либо вход состоялся. */
 export type EgovLoginResult =
   { readonly status: 'PENDING' } | { readonly status: 'COMPLETED'; readonly tokens: TokenPair };
+
+/**
+ * Профиль владельца аккаунта — то, что человек видит о себе сам.
+ * ФИО расшифровано (это его данные), ИИН — маской: полное значение на экране
+ * не нужно никому, а форма «900101******» достаточна для «это точно мой аккаунт».
+ */
+export interface MyProfileView {
+  readonly id: string;
+  readonly roles: readonly UserRole[];
+  readonly status: 'ACTIVE' | 'BLOCKED';
+  readonly egovVerified: boolean;
+  readonly verifiedAt: string | null;
+  readonly fio: string | null;
+  readonly iinMasked: string | null;
+  readonly createdAt: string;
+}

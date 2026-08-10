@@ -6,6 +6,7 @@ import { EgovModule } from '../integrations/egov/egov.module';
 
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { EgovVerifiedGuard } from './egov-verified.guard';
 import { JwtAuthGuard } from './jwt-auth.guard';
 import { RolesGuard } from './roles.guard';
 import { TokenService } from './token.service';
@@ -26,6 +27,7 @@ import { TokenService } from './token.service';
     TokenService,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: EgovVerifiedGuard },
   ],
   exports: [AuthService, TokenService],
 })

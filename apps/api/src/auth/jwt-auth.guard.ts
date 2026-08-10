@@ -60,7 +60,7 @@ export class JwtAuthGuard implements CanActivate {
 
     const session = await this.prisma.authSession.findUnique({
       where: { id: payload.sid },
-      include: { user: { select: { status: true, roles: true } } },
+      include: { user: { select: { status: true, roles: true, egovVerifiedAt: true } } },
     });
 
     if (!session) {
@@ -79,6 +79,7 @@ export class JwtAuthGuard implements CanActivate {
       id: session.userId,
       roles: session.user.roles,
       sessionId: session.id,
+      egovVerified: session.user.egovVerifiedAt !== null,
     };
     return true;
   }

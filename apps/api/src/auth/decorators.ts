@@ -5,6 +5,7 @@ import type { AuthenticatedUser } from './auth.types';
 
 export const IS_PUBLIC_KEY = 'auth:public';
 export const ROLES_KEY = 'auth:roles';
+export const REQUIRE_EGOV_VERIFIED_KEY = 'auth:egov-verified';
 
 /**
  * Открытая ручка.
@@ -18,6 +19,13 @@ export const Public = (): MethodDecorator & ClassDecorator => SetMetadata(IS_PUB
 /** Доступ только перечисленным ролям. Достаточно одной совпавшей. */
 export const Roles = (...roles: readonly UserRole[]): MethodDecorator & ClassDecorator =>
   SetMetadata(ROLES_KEY, roles);
+
+/**
+ * Только для верифицированных через eGov. Вешается на всё, что касается денег:
+ * задаток, ставки, реквизиты (FR-03).
+ */
+export const RequireEgovVerified = (): MethodDecorator & ClassDecorator =>
+  SetMetadata(REQUIRE_EGOV_VERIFIED_KEY, true);
 
 /** Текущий пользователь из access-токена. */
 export const CurrentUser = createParamDecorator(
