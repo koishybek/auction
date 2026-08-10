@@ -13,3 +13,6 @@ allowBuilds:
   # Prisma в postinstall распаковывает движки под платформу — без этого CLI не работает.
   '@prisma/engines': true
   prisma: true
+  # SWC компилирует тесты и, в отличие от esbuild, умеет emitDecoratorMetadata —
+  # без неё DI в NestJS не работает. В postinstall распаковывает бинарник.
+  '@swc/core': true

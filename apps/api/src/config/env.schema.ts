@@ -27,6 +27,27 @@ const connectionUrl = (label: string) =>
     { message: `${label}: ожидается строка подключения вида scheme://host/...` },
   );
 
+/**
+ * Ключ ровно на 32 байта в base64 (AES-256 / HMAC-SHA256).
+ * Проверяем длину, а не «непустоту»: короткий ключ молча ослабляет шифрование,
+ * и заметить это по поведению приложения невозможно.
+ */
+const key32 = (label: string) =>
+  z.string().refine(
+    (value) => {
+      try {
+        return Buffer.from(value, 'base64').length === 32;
+      } catch {
+        return false;
+      }
+    },
+    {
+      message:
+        `${label}: нужен ключ ровно на 32 байта в base64. ` +
+        `Сгенерировать: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`,
+    },
+  );
+
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
@@ -35,6 +56,14 @@ export const envSchema = z.object({
   /** Без пулера: Prisma нужны DDL и advisory-локи, через PgBouncer они не работают. */
   DIRECT_URL: connectionUrl('DIRECT_URL'),
   REDIS_URL: connectionUrl('REDIS_URL'),
+
+  /** Шифрование ПДн (AES-256-GCM). В проде — из KMS, а не из файла. */
+  PII_ENCRYPTION_KEY: key32('PII_ENCRYPTION_KEY'),
+  /**
+   * Отдельный ключ для blind index (HMAC). Именно отдельный: он детерминирован,
+   * и его утечка компрометирует поиск, но не сами данные.
+   */
+  PII_BLIND_INDEX_KEY: key32('PII_BLIND_INDEX_KEY'),
 
   /** Читаемые логи вместо JSON. Только для локальной отладки: в CI и проде — JSON. */
   LOG_PRETTY: z

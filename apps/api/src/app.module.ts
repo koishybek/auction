@@ -7,6 +7,7 @@ import { APP_PIPE } from '@nestjs/core';
 import { LoggerModule } from 'nestjs-pino';
 import { ZodValidationPipe } from 'nestjs-zod';
 
+import { CryptoModule } from './common/crypto/crypto.module';
 import { validateEnv, type Env } from './config/env.schema';
 import { HealthModule } from './health/health.module';
 
@@ -69,6 +70,7 @@ import { HealthModule } from './health/health.module';
       }),
     }),
 
+    CryptoModule,
     HealthModule,
   ],
 

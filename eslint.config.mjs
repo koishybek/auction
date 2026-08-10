@@ -23,9 +23,9 @@ export default tseslint.config(
     languageOptions: {
       parserOptions: {
         projectService: {
-          // prisma.config.ts — конфиг инструмента, он вне include у apps/api:
-          // добавить его туда нельзя, иначе tsc потащит его в dist и сломает структуру.
-          allowDefaultProject: ['apps/api/prisma.config.ts'],
+          // Конфиги инструментов вне include у apps/api: добавить их туда нельзя,
+          // иначе tsc потащит их в dist и сломает структуру сборки.
+          allowDefaultProject: ['apps/api/prisma.config.ts', 'apps/api/vitest.config.mts'],
         },
         tsconfigRootDir: import.meta.dirname,
       },
