@@ -1,0 +1,10 @@
+dist/
+node_modules/
+.next/
+coverage/
+pnpm-lock.yaml
+
+# Документы заказчика и план — форматирование не наше, диффы должны оставаться читаемыми
+docs/TZ.md
+docs/DEVELOPMENT_PLAN.md
+docs/TASKS.md

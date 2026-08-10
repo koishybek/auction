@@ -1,9 +1,9 @@
 /**
- * Проверка dev-окружения: доступны ли managed PostgreSQL и Redis и умеют ли они
- * то, на чём построено ядро аукциона.
+ * Проверка dev-окружения: доступны ли PostgreSQL и Redis и умеют ли они то,
+ * на чём построено ядро аукциона.
  *
  * Это замена «docker compose up» из исходной формулировки T-002: локальный Docker
- * в проекте не используется, инфраструктура — managed (Neon + Redis Cloud).
+ * в проекте не используется. PostgreSQL — локальный, Redis — managed (Redis Cloud).
  *
  * Проверяем не «пинг ради пинга», а конкретные возможности, без которых Phase 3
  * не поедет:
@@ -119,7 +119,7 @@ async function checkPostgres(label: string, url: string, ddl: boolean): Promise<
     );
 
     const tls = await client.query<{ ssl: boolean }>(
-      "SELECT COALESCE((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()), false) AS ssl",
+      'SELECT COALESCE((SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()), false) AS ssl',
     );
     const tlsOn = tls.rows[0]?.ssl === true;
     results.push(
@@ -140,7 +140,9 @@ async function checkPostgres(label: string, url: string, ddl: boolean): Promise<
 
     const latencyStart = performance.now();
     await client.query('SELECT 1');
-    results.push(ok(`${label}: RTT запроса`, 'SELECT 1', Math.round(performance.now() - latencyStart)));
+    results.push(
+      ok(`${label}: RTT запроса`, 'SELECT 1', Math.round(performance.now() - latencyStart)),
+    );
   } catch (error) {
     results.push(fail(`${label}: проверка`, describeError(error)));
   } finally {
