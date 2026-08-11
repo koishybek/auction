@@ -41,3 +41,6 @@ prisma/*.db-journal
 .turbo/
 .cache/
 tmp/
+
+# локальное файловое хранилище (T-016)
+.storage/

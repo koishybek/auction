@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 
 import { config as loadEnv } from 'dotenv';
@@ -10,6 +11,12 @@ import type { PrismaService } from '../src/prisma/prisma.service';
  * на dev-базе нельзя — данные разработчика исчезнут без предупреждения.
  */
 export const TEST_DB_NAME = 'auction_test';
+
+/**
+ * Хранилище файлов для e2e — во временном каталоге ОС, а не в рабочем дереве:
+ * тесты не должны оставлять мусор в репозитории.
+ */
+export const TEST_STORAGE_ROOT = resolve(tmpdir(), 'auction-e2e-storage');
 
 export function findRepoRoot(start: string): string {
   let dir = start;

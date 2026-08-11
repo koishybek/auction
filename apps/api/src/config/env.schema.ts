@@ -87,6 +87,12 @@ export const envSchema = z.object({
   JWT_ACCESS_TTL: duration('JWT_ACCESS_TTL').default('15m'),
   JWT_REFRESH_TTL: duration('JWT_REFRESH_TTL').default('30d'),
 
+  /**
+   * Корень локального файлового хранилища (Data Room, протоколы, акты).
+   * Временная реализация, пока нет реквизитов S3 — см. integrations/storage.
+   */
+  STORAGE_LOCAL_ROOT: z.string().min(1).default('.storage'),
+
   /** Читаемые логи вместо JSON. Только для локальной отладки: в CI и проде — JSON. */
   LOG_PRETTY: z
     .enum(['true', 'false'])

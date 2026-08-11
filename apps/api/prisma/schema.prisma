@@ -405,9 +405,15 @@ model LotDocument {
   lotId String @map("lot_id") @db.Uuid
   lot   Lot    @relation(fields: [lotId], references: [id])
 
-  kind           DocumentKind
-  fileKey        String       @map("file_key")
-  downloadsCount Int          @default(0) @map("downloads_count")
+  kind DocumentKind
+  /// Ключ объекта в хранилище. Генерируется сервером — имя от пользователя в путь не попадает.
+  fileKey String @map("file_key")
+  /// Исходное имя для показа и Content-Disposition, очищенное от пути и управляющих символов.
+  fileName    String @default("document") @map("file_name")
+  contentType String @default("application/octet-stream") @map("content_type")
+  sizeBytes   Int    @default(0) @map("size_bytes")
+
+  downloadsCount Int @default(0) @map("downloads_count")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
 

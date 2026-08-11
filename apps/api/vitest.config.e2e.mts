@@ -1,7 +1,7 @@
 import swc from 'unplugin-swc';
 import { defineConfig } from 'vitest/config';
 
-import { resolveTestUrls } from './test/test-db';
+import { resolveTestUrls, TEST_STORAGE_ROOT } from './test/test-db';
 
 // Строки подключения считаются здесь, чтобы попасть в окружение воркеров:
 // изменения process.env из globalSetup до них не доезжают.
@@ -22,6 +22,7 @@ export default defineConfig({
       NODE_ENV: 'test',
       DATABASE_URL: databaseUrl,
       DIRECT_URL: databaseUrl,
+      STORAGE_LOCAL_ROOT: TEST_STORAGE_ROOT,
     },
   },
 });
