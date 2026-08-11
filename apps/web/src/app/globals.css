@@ -1,14 +1,30 @@
 @import 'tailwindcss';
 
-/* Tailwind v4: тема задаётся здесь, отдельного tailwind.config.js больше нет. */
+/**
+ * Тема: торговый терминал, а не витрина.
+ *
+ * Два акцента с разными обязанностями, а не один «фирменный»:
+ *   signal (холодный бирюзовый) — время, статус «идёт сейчас»;
+ *   value  (тёплая охра)        — деньги.
+ * Холодное против тёплого = время против денег, ровно тот конфликт,
+ * на котором построен Smart Hammer.
+ */
 @theme {
-  --color-ink: #0d1117;
-  --color-ink-soft: #1c2230;
-  --color-muted: #8b94a7;
-  --color-line: #262d3d;
-  --color-accent: #f0b429;
-  --color-up: #35c07f;
-  --color-down: #e0524a;
+  --color-ink: #0b1014;
+  --color-ink-raised: #121a20;
+  --color-ink-sunken: #070b0e;
+  --color-rule: #1e2a32;
+  --color-rule-bright: #2c3d47;
+  --color-paper: #e8eef2;
+  --color-muted: #7c8e9a;
+  --color-signal: #2fd4c6;
+  --color-signal-dim: #1a6b66;
+  --color-value: #d9a441;
+  --color-alert: #e0524a;
+
+  --font-sans: var(--font-plex-sans), system-ui, sans-serif;
+  --font-serif: var(--font-plex-serif), Georgia, serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
 }
 
 html {
@@ -17,5 +33,59 @@ html {
 
 body {
   background: var(--color-ink);
-  color: #e8ecf4;
+  color: var(--color-paper);
+  font-family: var(--font-sans);
+}
+
+/*
+ * Собственные классы обязаны лежать в слое components, а не просто в конце файла.
+ * Иначе при одинаковой специфичности они встают ПОСЛЕ утилит Tailwind и молча
+ * перебивают их: `.eyebrow` съедал бы `hover:text-*` на том же элементе.
+ */
+@layer components {
+  /* Цифры в таблице обязаны стоять в колонку: цена — это столбец, а не текст. */
+  .tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* Надзаголовки: узкие, разряженные, всегда в моно — они маркируют данные. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+}
+
+/*
+ * Единственная анимация на сайте: третий сегмент храповика у лота в Фазе III.
+ * Она несёт смысл «торги идут прямо сейчас», а не украшает.
+ */
+@keyframes live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.live-segment {
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-segment {
+    animation: none;
+  }
+}
+
+/* Фокус виден всегда: по торговой доске ходят с клавиатуры. */
+:focus-visible {
+  outline: 2px solid var(--color-signal);
+  outline-offset: 2px;
 }

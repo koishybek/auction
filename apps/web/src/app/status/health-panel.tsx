@@ -30,23 +30,21 @@ export function HealthPanel({
   const dependencies = Object.entries(shown?.dependencies ?? {});
 
   return (
-    <section className="rounded-lg border border-[var(--color-line)] bg-[var(--color-ink-soft)] p-5">
+    <section className="border border-[var(--color-rule)] bg-[var(--color-ink-raised)] p-5">
       <div className="mb-4 flex items-baseline justify-between gap-4">
-        <h2 className="text-sm font-medium tracking-wide text-[var(--color-muted)] uppercase">
-          Состояние бэкенда
-        </h2>
+        <h2 className="eyebrow">Состояние бэкенда</h2>
         <button
           type="button"
           onClick={() => void refresh()}
           disabled={checking}
-          className="rounded border border-[var(--color-line)] px-3 py-1 text-sm text-[var(--color-muted)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-accent)] disabled:opacity-40"
+          className="rounded border border-[var(--color-rule)] px-3 py-1 text-sm text-[var(--color-muted)] transition-colors hover:border-[var(--color-value)] hover:text-[var(--color-value)] disabled:opacity-40"
         >
           {checking ? 'Проверяю…' : 'Перепроверить'}
         </button>
       </div>
 
       {shownError !== null && (
-        <p className="text-sm text-[var(--color-down)]">API недоступен: {shownError}</p>
+        <p className="text-sm text-[var(--color-alert)]">API недоступен: {shownError}</p>
       )}
 
       {dependencies.length > 0 && (
@@ -56,7 +54,9 @@ export function HealthPanel({
               <span className="font-mono">{name}</span>
               <span
                 className={
-                  dependency.status === 'up' ? 'text-[var(--color-up)]' : 'text-[var(--color-down)]'
+                  dependency.status === 'up'
+                    ? 'text-[var(--color-signal)]'
+                    : 'text-[var(--color-alert)]'
                 }
               >
                 {dependency.status === 'up'

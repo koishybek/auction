@@ -1,4 +1,4 @@
-import type { LivenessReport, ReadinessReport } from '@auction/shared';
+import type { LivenessReport, LotListView, LotView, ReadinessReport } from '@auction/shared';
 
 /**
  * Клиент API. Типы ответов берутся из @auction/shared — того же пакета, который
@@ -38,6 +38,26 @@ export function getLiveness(): Promise<ApiResult<LivenessReport>> {
 
 export function getReadiness(): Promise<ApiResult<ReadinessReport>> {
   return request<ReadinessReport>('/api/health/ready');
+}
+
+export interface CatalogQuery {
+  readonly page?: number;
+  readonly pageSize?: number;
+  readonly type?: 'REALTY' | 'VEHICLE';
+}
+
+/** Публичный каталог. Аноним видит только лоты в публичных статусах. */
+export function getLots(query: CatalogQuery = {}): Promise<ApiResult<LotListView>> {
+  const params = new URLSearchParams();
+  if (query.page !== undefined) params.set('page', String(query.page));
+  if (query.pageSize !== undefined) params.set('pageSize', String(query.pageSize));
+  if (query.type !== undefined) params.set('type', query.type);
+  const qs = params.toString();
+  return request<LotListView>(`/api/lots${qs === '' ? '' : `?${qs}`}`);
+}
+
+export function getLot(id: string): Promise<ApiResult<LotView>> {
+  return request<LotView>(`/api/lots/${id}`);
 }
 
 export { API_BASE_URL };
