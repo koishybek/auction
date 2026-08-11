@@ -1,0 +1,183 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Новый пуш в ту же ветку отменяет предыдущий прогон: держать очередь
+# из устаревших сборок незачем.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  quality:
+    name: Линтеры, типы, юнит-тесты
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      # Клиент Prisma нужен typecheck'у: он генерируется в src и участвует в сборке.
+      - name: Генерация клиента Prisma
+        run: pnpm db:generate
+
+      - name: Проверка форматирования
+        run: pnpm format:check
+
+      - name: Линтер
+        run: pnpm lint
+
+      - name: Проверка типов
+        run: pnpm typecheck
+
+      - name: Юнит-тесты
+        run: pnpm --filter @auction/api test
+
+      - name: Сборка
+        run: pnpm build
+
+  e2e:
+    name: E2E на настоящих PostgreSQL и Redis
+    runs-on: ubuntu-latest
+
+    # Сервисные контейнеры дают в CI то, чего нет на dev-машине: настоящий
+    # Redis 7. Именно здесь впервые проверяются EVAL, PTTL и pub/sub.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: auction
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/auction
+      DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/auction
+      REDIS_URL: redis://127.0.0.1:6379
+      # Ключи и секреты одноразовые, сгенерированы для прогона: настоящие
+      # живут в секретах окружения и в CI не нужны.
+      PII_ENCRYPTION_KEY: Y2ktb25seS1waWktZW5jcnlwdGlvbi1rZXktMzJieQ==
+      PII_BLIND_INDEX_KEY: Y2ktb25seS1waWktYmxpbmQtaW5kZXgta2V5LTMyYnk=
+      JWT_ACCESS_SECRET: ci-only-access-secret-not-used-in-production
+      JWT_REFRESH_SECRET: ci-only-refresh-secret-not-used-in-production
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Генерация клиента Prisma
+        run: pnpm db:generate
+
+      # Проверка окружения гоняется до тестов: если Redis не умеет EVAL или
+      # PTTL в миллисекундах, лучше узнать здесь, а не на Phase 3.
+      - name: Проверка окружения
+        run: pnpm check:env
+
+      - name: Миграции
+        run: pnpm db:deploy
+
+      - name: E2E-тесты
+        run: pnpm --filter @auction/api test:e2e
+
+  images:
+    name: Сборка образов
+    runs-on: ubuntu-latest
+    needs: [quality, e2e]
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      matrix:
+        app: [api, web]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # В registry уходят только сборки с main и теги: образ из чужого PR
+      # в общем реестре не нужен, а собрать его для проверки — нужно.
+      - name: Вход в registry
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Метаданные образа
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}-${{ matrix.app }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=sha,format=short
+
+      - name: Сборка и публикация
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/docker/${{ matrix.app }}.Dockerfile
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  chart:
+    name: Проверка Helm-чарта
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v4
+
+      - name: helm lint
+        run: helm lint infra/helm/auction -f infra/helm/auction/values-stage.yaml
+
+      - name: helm template
+        run: helm template auction infra/helm/auction -f infra/helm/auction/values-stage.yaml > /dev/null

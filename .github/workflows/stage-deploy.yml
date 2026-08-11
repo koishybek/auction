@@ -1,0 +1,44 @@
+name: Деплой на stage
+
+# Выкат по тегу, а не по каждому пушу в main: на stage должно попадать то,
+# что осознанно помечено версией (DoD T-009).
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: helm upgrade
+    runs-on: ubuntu-latest
+    # Окружение с обязательным ревью настраивается в GitHub: без него тег
+    # уезжал бы на стенд без единого человеческого решения.
+    environment: stage
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: azure/setup-helm@v4
+
+      - name: Настройка доступа к кластеру
+        # KUBE_CONFIG появится, когда будет кластер (см. docs/dev-setup.md).
+        run: |
+          mkdir -p "$HOME/.kube"
+          printf '%s' "${{ secrets.KUBE_CONFIG }}" | base64 -d > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Выкат
+        run: |
+          helm upgrade --install auction infra/helm/auction \
+            --namespace auction-stage --create-namespace \
+            --values infra/helm/auction/values-stage.yaml \
+            --set image.repository="${{ github.repository }}" \
+            --set image.tag="${GITHUB_REF_NAME#v}" \
+            --wait --timeout 10m
+
+      - name: Проверка после выката
+        run: |
+          kubectl -n auction-stage rollout status deploy/auction-api --timeout=5m
+          kubectl -n auction-stage rollout status deploy/auction-web --timeout=5m

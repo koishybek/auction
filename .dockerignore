@@ -1,0 +1,24 @@
+# Контекст сборки должен быть маленьким: node_modules и dist пересобираются
+# внутри образа, а .env в образ не должен попасть ни при каких обстоятельствах.
+node_modules
+**/node_modules
+dist
+**/dist
+.next
+**/.next
+**/src/generated
+.git
+.github
+.husky
+.storage
+
+.env
+.env.*
+!.env.example
+
+docs
+infra/helm
+load
+e2e
+coverage
+*.log
