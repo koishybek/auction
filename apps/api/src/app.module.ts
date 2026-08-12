@@ -3,6 +3,7 @@ import { APP_PIPE } from '@nestjs/core';
 import { ZodValidationPipe } from 'nestjs-zod';
 
 import { AdminModule } from './admin/admin.module';
+import { AuctionModule } from './auction/auction.module';
 import { AuthModule } from './auth/auth.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { CoreModule } from './core.module';
@@ -26,6 +27,7 @@ import { UsersModule } from './users/users.module';
     UsersModule,
     AdminModule,
     LotsModule,
+    AuctionModule,
     HealthModule,
   ],
 

@@ -95,14 +95,20 @@ async function lotInPhase(
     .set(...auth(seller))
     .expect(200);
 
-  for (const status of ['PHASE_I', 'PHASE_II', 'PHASE_III'] as const) {
+  for (const status of ['PHASE_I', 'PHASE_II'] as const) {
     await api()
       .patch(`/api/admin/lots/${lot.id}/status`)
       .set(...auth(admin))
       .send({ to: status, reason: 'проводка в тесте' })
       .expect(200);
-    if (status === target) break;
+    if (status === target) return lot;
   }
+
+  // Торги открываются вместе с сессией, а не сменой статуса (T-022).
+  await api()
+    .post(`/api/admin/lots/${lot.id}/auction/start`)
+    .set(...auth(admin))
+    .expect(200);
 
   return lot;
 }

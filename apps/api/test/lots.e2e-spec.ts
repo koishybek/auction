@@ -94,8 +94,7 @@ async function driveTo(
     .expect(200);
   if (target === 'MODERATION') return;
 
-  const chain = ['PHASE_I', 'PHASE_II', 'PHASE_III'] as const;
-  for (const status of chain) {
+  for (const status of ['PHASE_I', 'PHASE_II'] as const) {
     await api()
       .patch(`/api/admin/lots/${lotId}/status`)
       .set(...auth(admin))
@@ -103,6 +102,13 @@ async function driveTo(
       .expect(200);
     if (status === target) return;
   }
+
+  // PHASE_III выставляется только вместе с торговой сессией (T-022): статус
+  // «идут торги» без цены, дедлайна и seq — лот, на который нельзя поставить.
+  await api()
+    .post(`/api/admin/lots/${lotId}/auction/start`)
+    .set(...auth(admin))
+    .expect(200);
 }
 
 beforeAll(async () => {
@@ -265,7 +271,7 @@ describe('T-015: статусная машина через API', () => {
     const jump = await api()
       .patch(`/api/admin/lots/${lot.id}/status`)
       .set(...auth(admin))
-      .send({ to: 'PHASE_III', reason: 'прыжок через фазы' })
+      .send({ to: 'FINISHED', reason: 'прыжок через фазы' })
       .expect(409);
     expect(jump.body).toMatchObject({ code: 'INVALID_TRANSITION' });
     expect(JSON.stringify(jump.body)).toMatch(/не существует/);

@@ -1,6 +1,7 @@
 import { LOT_STATUSES, LOT_TYPES, type LotListView, type LotView } from '@auction/shared';
 import {
   Body,
+  ConflictException,
   Controller,
   Get,
   HttpCode,
@@ -201,6 +202,18 @@ export class AdminLotsController {
     @Param('id', ParseUUIDPipe) lotId: string,
     @Body() body: AdminTransitionDto,
   ): Promise<LotView> {
+    /**
+     * PHASE_III через общую ручку не выставляется. Статус «идут торги» без
+     * торговой сессии — это лот, на который нельзя поставить: цены, дедлайна и
+     * seq не существует, а в каталоге он выглядит живым. Открывает торги
+     * POST /admin/lots/:lotId/auction/start, который заводит и статус, и сессию.
+     */
+    if (body.to === 'PHASE_III') {
+      throw new ConflictException({
+        code: 'USE_AUCTION_START',
+        message: 'Торги открываются через POST /api/admin/lots/{lotId}/auction/start',
+      });
+    }
     return this.lots.transition({ lotId, to: body.to, actor: 'ADMIN', actorId: user.id });
   }
 }

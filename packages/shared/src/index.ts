@@ -1,3 +1,4 @@
+export * from './auction';
 export * from './auth';
 export * from './health';
 export * from './lots';
