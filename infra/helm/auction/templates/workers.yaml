@@ -1,7 +1,12 @@
 {{- if .Values.workers.enabled }}
 {{/*
-Воркеры BullMQ: finisher дедлайнов торгов, крон ЕРД 24 ч, SLA-возвраты, lockout.
-Приложение apps/workers появляется в T-020 и T-027 — до этого workers.enabled: false.
+Воркеры BullMQ: крон ЕРД 24 ч (T-020), далее finisher дедлайнов торгов,
+SLA-возвраты, lockout.
+
+Образ тот же, что у API, — меняется только команда. Воркер живёт в одной
+кодовой базе с API (см. CLAUDE.md, раздел 3), и собирать второй образ из тех
+же исходников значило бы возить по сети лишние сотни мегабайт ради другого
+аргумента запуска.
 
 Сервиса нет намеренно: воркеры ничего не слушают, они разбирают очередь.
 Реплик по умолчанию одна: finisher завершает торги, и его горизонтальное
@@ -36,10 +41,16 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: workers
-          image: {{ include "auction.image" (dict "Values" .Values "Chart" .Chart "component" "workers") }}
+          image: {{ include "auction.image" (dict "Values" .Values "Chart" .Chart "component" "api") }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ['node', 'dist/main.worker.js']
           securityContext:
             {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          env:
+            {{- range $key, $value := .Values.workers.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
           envFrom:
             {{- include "auction.secretEnv" . | nindent 12 }}
           resources:

@@ -59,13 +59,31 @@ export class RedisService implements OnModuleDestroy {
     return client;
   }
 
-  private createClient(label: string): Redis {
+  /**
+   * Соединение для BullMQ.
+   *
+   * `maxRetriesPerRequest: null` здесь обязателен: воркер ждёт задачу
+   * блокирующей командой, и для обычного клиента это висящий запрос, который
+   * он оборвёт по лимиту попыток. BullMQ прямо требует такую настройку.
+   */
+  createQueueConnection(label: string): Redis {
+    const client = this.createClient(label, null);
+    this.extra.push(client);
+    return client;
+  }
+
+  /**
+   * `maxRetriesPerRequest` отдельным параметром, а не объектом опций: спред
+   * необязательных полей ioredis не проходит exactOptionalPropertyTypes, а
+   * ослаблять правило ради одного ключа — плохой размен.
+   */
+  private createClient(label: string, maxRetriesPerRequest: number | null = 3): Redis {
     const client = new Redis(this.url, {
       // Видно в CLIENT LIST: при разборе инцидента сразу ясно, кто держит соединение.
       connectionName: `${this.namespace}:${label}`,
       // Команда не должна висеть вечно: подвисший INCR в обработчике ставки
       // держит HTTP-запрос до таймаута клиента, а участник видит «не отвечает».
-      maxRetriesPerRequest: 3,
+      maxRetriesPerRequest,
     });
 
     // Без слушателя ioredis печатает «Unhandled error event» и роняет процесс:

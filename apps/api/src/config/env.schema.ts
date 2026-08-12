@@ -124,6 +124,17 @@ export const envSchema = z.object({
    */
   LOT_VIEWS_FLUSH_MS: z.coerce.number().int().min(1_000).default(30_000),
 
+  /**
+   * Период перепроверки лотов в КИСИП/ЕРД. ТЗ §5.1 требует раз в 24 часа —
+   * это значение по умолчанию. Ручка нужна прежде всего stage, где ждать
+   * сутки ради проверки крона бессмысленно.
+   */
+  REGISTRY_RECHECK_INTERVAL_MS: z.coerce
+    .number()
+    .int()
+    .min(60_000)
+    .default(24 * 60 * 60 * 1000),
+
   /** Читаемые логи вместо JSON. Только для локальной отладки: в CI и проде — JSON. */
   LOG_PRETTY: z
     .enum(['true', 'false'])

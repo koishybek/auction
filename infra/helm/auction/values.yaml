@@ -47,10 +47,11 @@ web:
   env:
     NODE_ENV: production
 
-# Приложение appears в T-020 (крон ЕРД) и T-027 (finisher торгов).
-# До этого момента деплоить нечего — включать нельзя.
+# Фоновые задачи. Работают из образа API, отличаются только командой запуска
+# (dist/main.worker.js). Сейчас несут крон перепроверки ЕРД (T-020); дальше
+# сюда придут finisher торгов, возвраты задатков и снятие карантина.
 workers:
-  enabled: false
+  enabled: true
   replicaCount: 1
   resources:
     requests:
@@ -58,6 +59,9 @@ workers:
       memory: 256Mi
     limits:
       memory: 512Mi
+  env:
+    NODE_ENV: production
+    LOG_PRETTY: 'false'
 
 # Миграции накатываются перед стартом подов, а не приложением на старте:
 # иначе две реплики попытаются мигрировать одновременно.
