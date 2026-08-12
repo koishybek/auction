@@ -6,6 +6,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuctionStateService } from './auction-state.service';
 import { AdminAuctionController, AuctionController } from './auction.controller';
 import { AuctionService } from './auction.service';
+import { BidService } from './bid.service';
 
 /**
  * Движок торгов.
@@ -17,7 +18,7 @@ import { AuctionService } from './auction.service';
 @Module({
   imports: [PrismaModule, LotsModule],
   controllers: [AuctionController, AdminAuctionController],
-  providers: [AuctionService, AuctionStateService],
-  exports: [AuctionService, AuctionStateService],
+  providers: [AuctionService, AuctionStateService, BidService],
+  exports: [AuctionService, AuctionStateService, BidService],
 })
 export class AuctionModule {}

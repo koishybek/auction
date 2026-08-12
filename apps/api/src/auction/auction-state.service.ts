@@ -4,6 +4,8 @@ import { Injectable } from '@nestjs/common';
 import { RedisService } from '../redis/redis.service';
 import type { RedisScript } from '../redis/redis-script';
 
+import { NEXT_PRICE_LUA, NOW_MS_LUA } from './lua/primitives';
+
 /**
  * Сколько живёт ключ состояния торгов.
  *
@@ -12,24 +14,7 @@ import type { RedisScript } from '../redis/redis-script';
  * замороженные по SLA торги (FR-08). Каждая принятая ставка продлевает его
  * заново вместе со сбросом дедлайна.
  */
-const STATE_TTL_MS = 24 * 60 * 60 * 1000;
-
-/**
- * Время внутри торгов берётся из самого Redis (`TIME`).
- *
- * Правило CLAUDE.md «интервалы считаем по monotonicMs» работает внутри одного
- * процесса. Здесь процессов много: API-инстансы, gateway, воркеры — и общих
- * монотонных часов у них нет. Единственные часы, с которыми согласны все
- * участники, — часы Redis, и именно они сравниваются с дедлайном в одном
- * атомарном скрипте со ставкой. Дрейф между узлами держит chrony (NFR-04).
- *
- * `string.format('%.0f')` обязателен: `tostring(1786000000000)` в Lua даёт
- * «1.786e+12», и дедлайн превратился бы в мусор.
- */
-const NOW_MS_LUA = `
-local t = redis.call('TIME')
-local nowMs = t[1] * 1000 + math.floor(t[2] / 1000)
-`;
+export const STATE_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Создать состояние торгов. Возвращает ошибку, если состояние уже есть:
@@ -56,16 +41,20 @@ return { string.format('%.0f', nowMs), string.format('%.0f', deadlineMs) }
 `;
 
 /**
- * Прочитать состояние вместе с текущим временем Redis.
+ * Прочитать состояние вместе с текущим временем Redis и суммой следующего шага.
  *
- * Одним скриптом, а не двумя командами: остаток таймера — это разность
- * дедлайна и «сейчас», и если их взять по отдельности, между ними успеет
- * пройти время. На пятидесяти секундах это незаметно, на разборе спорной
- * ставки — уже нет.
+ * Одним скриптом, а не тремя командами. Остаток таймера — это разность дедлайна
+ * и «сейчас»: возьми их по отдельности, и между ними успеет пройти время. На
+ * пятидесяти секундах это незаметно, на разборе спорной ставки — уже нет.
+ *
+ * Сумма шага считается здесь же тем же кодом, что и при приёме ставки. Иначе
+ * её пришлось бы считать клиенту, появилась бы вторая реализация округления —
+ * и участник, честно приславший «свою» сумму, ловил бы PRICE_MISMATCH.
  *
  * KEYS[1] — ключ состояния
  */
 const READ_STATE = `
+${NEXT_PRICE_LUA}
 local state = redis.call('HGETALL', KEYS[1])
 if #state == 0 then
   return nil
@@ -73,6 +62,8 @@ end
 ${NOW_MS_LUA}
 table.insert(state, 'nowMs')
 table.insert(state, string.format('%.0f', nowMs))
+table.insert(state, 'nextPriceTiyn')
+table.insert(state, string.format('%.0f', nextPriceTiyn(tonumber(redis.call('HGET', KEYS[1], 'priceTiyn')))))
 return state
 `;
 
@@ -96,6 +87,8 @@ export interface AuctionState {
   readonly sessionId: string;
   readonly status: SessionStatusValue;
   readonly priceTiyn: bigint;
+  /** Сумма следующей ставки. Считает Redis тем же кодом, что и приём ставки. */
+  readonly nextPriceTiyn: bigint;
   readonly seq: number;
   /** Момент закрытия торгов по часам Redis, мс эпохи. */
   readonly deadlineMs: number;
@@ -217,6 +210,7 @@ function parseState(flat: readonly string[]): AuctionState {
     sessionId: map.get('sessionId') ?? '',
     status,
     priceTiyn: BigInt(map.get('priceTiyn') ?? '0'),
+    nextPriceTiyn: BigInt(map.get('nextPriceTiyn') ?? '0'),
     seq: Number(map.get('seq') ?? '0'),
     deadlineMs: Number(map.get('deadlineMs') ?? '0'),
     nowMs: Number(map.get('nowMs') ?? '0'),

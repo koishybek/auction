@@ -84,14 +84,10 @@ export class AuctionService {
 
     this.logger.log(`Лот ${lotId}: торги открыты, сессия ${persisted.id}`);
 
-    return toStateView(lotId, {
-      sessionId: session.id,
-      status: 'RUNNING',
-      priceTiyn,
-      seq: 0,
-      deadlineMs,
-      nowMs: startedAtMs,
-    });
+    // Читаем состояние обратно, а не собираем ответ из локальных переменных:
+    // сумма следующего шага считается в Redis, и подменять её здесь значило бы
+    // завести вторую реализацию правила округления.
+    return this.snapshot(lotId);
   }
 
   /**
@@ -160,6 +156,7 @@ function toStateView(lotId: string, state: AuctionState): AuctionStateView {
     sessionId: state.sessionId,
     status: state.status,
     currentPriceTenge: Number(toTenge(tiyn(state.priceTiyn))),
+    nextBidTenge: Number(toTenge(tiyn(state.nextPriceTiyn))),
     seq: state.seq,
     timeRemainingMs: Math.max(0, state.deadlineMs - state.nowMs),
     serverTs: state.nowMs,

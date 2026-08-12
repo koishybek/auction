@@ -158,6 +158,9 @@ describe('T-022: модель торговой сессии', () => {
     expect(live?.priceTiyn).toBe(4_500_000_000n);
     expect(view.currentPriceTenge).toBe(45_000_000);
 
+    // Сумму шага называет сервер: он же её и сверяет при приёме ставки (QA-04).
+    expect(view.nextBidTenge).toBe(46_350_000);
+
     // Лот перешёл в торги и показывает текущую цену в каталоге.
     const stored = await prisma.lot.findUniqueOrThrow({ where: { id: lot.id } });
     expect(stored.status).toBe('PHASE_III');
