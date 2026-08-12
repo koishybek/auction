@@ -77,15 +77,23 @@ redis.call('HSET', KEYS[1],
   'lastBlindCode', ARGV[3])
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[5]))
 
+-- Событие ровно той структуры, что задана ТЗ §2.1: ключ 'event', суммы в
+-- ТЕНГЕ, bid_step_kzt — величина шага, а не новая цена. Пересылать его
+-- клиентам можно как есть, не разбирая: на 50 000 подключений разбор и
+-- обратная сборка JSON в gateway — это работа на пустом месте.
 redis.call('PUBLISH', ARGV[6], cjson.encode({
-  type = 'bid_accepted',
-  lotId = ARGV[7],
-  sessionId = state[5],
+  event = 'bid_updated',
+  lot_id = ARGV[7],
+  current_price_kzt = nextTiyn / 100,
+  bid_step_kzt = (nextTiyn - tonumber(state[2])) / 100,
+  last_bidder_blind_id = ARGV[3],
+  time_remaining_ms = tonumber(ARGV[4]),
+  timestamp = nowMs,
+  -- Сверх схемы ТЗ: номер ставки нужен клиенту после переподключения, чтобы
+  -- отличить пропущенное от уже показанного (T-030). Лишние поля клиент,
+  -- написанный по ТЗ, просто не читает.
   seq = seq,
-  priceTiyn = string.format('%.0f', nextTiyn),
-  deadlineMs = string.format('%.0f', newDeadlineMs),
-  serverTs = string.format('%.0f', nowMs),
-  blindCode = ARGV[3]
+  session_id = state[5]
 }))
 
 return {

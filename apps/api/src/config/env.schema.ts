@@ -55,6 +55,8 @@ const duration = (label: string) =>
 export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  /** Порт WebSocket-gateway. Там же отдаётся /health для проб Kubernetes. */
+  GATEWAY_PORT: z.coerce.number().int().min(1).max(65535).default(3200),
 
   /**
    * Сколько доверенных прокси стоит перед API. 0 — никого, адрес клиента берётся

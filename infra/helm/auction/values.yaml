@@ -47,6 +47,25 @@ web:
   env:
     NODE_ENV: production
 
+# WebSocket-gateway торгов. Работает из образа API, отличается командой запуска
+# (dist/main.gateway.js). Реплик две с самого начала: сокеты должны переживать
+# выкат, а мост через Redis pub/sub делает поды равнозначными.
+gateway:
+  enabled: true
+  replicaCount: 2
+  port: 3200
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      # Память растёт от числа соединений, а не от нагрузки на CPU: лимит выше,
+      # чем у API, при той же скромной заявке.
+      memory: 1Gi
+  env:
+    NODE_ENV: production
+    LOG_PRETTY: 'false'
+
 # Фоновые задачи. Работают из образа API, отличаются только командой запуска
 # (dist/main.worker.js). Сейчас несут крон перепроверки ЕРД (T-020); дальше
 # сюда придут finisher торгов, возвраты задатков и снятие карантина.

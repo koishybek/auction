@@ -35,13 +35,17 @@ spec:
                 name: {{ include "auction.fullname" . }}-api
                 port:
                   number: {{ .Values.api.port }}
+          {{- end }}
+          {{- if .Values.gateway.enabled }}
+          # Сокеты идут в gateway, а не в API: это отдельный Deployment со своим
+          # профилем нагрузки (T-023).
           - path: /ws
             pathType: Prefix
             backend:
               service:
-                name: {{ include "auction.fullname" . }}-api
+                name: {{ include "auction.fullname" . }}-gateway
                 port:
-                  number: {{ .Values.api.port }}
+                  number: {{ .Values.gateway.port }}
           {{- end }}
           {{- if .Values.web.enabled }}
           - path: /

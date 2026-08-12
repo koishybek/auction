@@ -1,0 +1,102 @@
+{{- if .Values.gateway.enabled }}
+{{/*
+WebSocket-gateway торгов (T-023).
+
+Образ тот же, что у API, — меняется только команда: gateway живёт в одной
+кодовой базе (см. CLAUDE.md, раздел 3), и второй образ из тех же исходников
+означал бы лишние сотни мегабайт по сети ради другого аргумента запуска.
+
+Отдельный Deployment, а не контейнер рядом с API: профиль нагрузки другой.
+Gateway держит десятки тысяч живых соединений и масштабируется по их числу,
+API — по числу запросов. Sticky-сессий не требует: состояние торгов в Redis,
+события расходятся через pub/sub, любой под равнозначен (NFR-03).
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "auction.fullname" . }}-gateway
+  labels:
+    {{- include "auction.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  replicas: {{ .Values.gateway.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: gateway
+  template:
+    metadata:
+      labels:
+        {{- include "auction.labels" . | nindent 8 }}
+        app.kubernetes.io/component: gateway
+    spec:
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Соединения надо закрыть штатно, а не оборвать: клиент увидит нормальное
+      # закрытие, переподключится к другому поду и заберёт свежий снимок.
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: gateway
+          image: {{ include "auction.image" (dict "Values" .Values "Chart" .Chart "component" "api") }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ['node', 'dist/main.gateway.js']
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: ws
+              containerPort: {{ .Values.gateway.port }}
+          env:
+            - name: GATEWAY_PORT
+              value: {{ .Values.gateway.port | quote }}
+            {{- range $key, $value := .Values.gateway.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            {{- include "auction.secretEnv" . | nindent 12 }}
+          # Проба не трогает БД и Redis: их падение не повод перезапускать
+          # исправный под и рвать десятки тысяч соединений разом.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: ws
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: ws
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "auction.fullname" . }}-gateway
+  labels:
+    {{- include "auction.labels" . | nindent 4 }}
+    app.kubernetes.io/component: gateway
+spec:
+  type: ClusterIP
+  ports:
+    - name: ws
+      port: {{ .Values.gateway.port }}
+      targetPort: ws
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: gateway
+{{- end }}

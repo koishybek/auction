@@ -207,15 +207,26 @@ describe('T-024: атомарное ядро ставки', () => {
 
     expect(received).toHaveLength(1);
     const event = JSON.parse(received[0] ?? '{}') as Record<string, unknown>;
-    expect(event['type']).toBe('bid_accepted');
-    expect(event['lotId']).toBe(lotId);
-    expect(event['sessionId']).toBe(sessionId);
+
+    // Структура ровно по ТЗ §2.1: ключ event, суммы в тенге, шаг — величина
+    // прибавки, а не новая цена.
+    expect(event['event']).toBe('bid_updated');
+    expect(event['lot_id']).toBe(lotId);
+    expect(event['current_price_kzt']).toBe(1_030_000); // 1 000 000 ₸ +3 %
+    expect(event['bid_step_kzt']).toBe(30_000);
+    expect(event['time_remaining_ms']).toBe(SMART_HAMMER_TIMER_MS);
+    expect(typeof event['timestamp']).toBe('number');
+
+    // Сверх схемы ТЗ — для ресинка после обрыва (T-030).
     expect(event['seq']).toBe(1);
-    // Деньги в событии — строкой: JSON-число на 14 знаках теряет точность.
-    expect(event['priceTiyn']).toBe(next.toString());
-    // В ленте только псевдоним: реальные ФИО и ИИН не появляются никогда (FR-09).
-    expect(event['blindCode']).toBe('Инвестор #704');
+    expect(event['session_id']).toBe(sessionId);
+
+    // В ленте только псевдоним: реальные ФИО, ИИН и id не появляются никогда (FR-09).
+    expect(event['last_bidder_blind_id']).toBe('Инвестор #704');
     expect(JSON.stringify(event)).not.toContain('bidder-1');
+
+    // Сумма в тенге совпадает с тем, что вернуло ядро в тиынах.
+    expect(BigInt(event['current_price_kzt'] as number) * 100n).toBe(next);
   });
 
   it('последовательные ставки наращивают цену и seq без пропусков', async () => {
