@@ -119,9 +119,12 @@ describe('T-024: атомарное ядро ставки', () => {
 
     // Иначе toTenge на границе сериализации бросит, и лот перестанет
     // открываться посреди торгов.
+    //
+    // Участники чередуются: перебивать собственную последнюю ставку нельзя
+    // (T-025), и подряд от одного лица торги идти не могут.
     for (let step = 0; step < 10; step += 1) {
       const next = await bids.nextPriceTiyn(lotId);
-      const outcome = await place(lotId, next);
+      const outcome = await place(lotId, next, `bidder-${String(step % 2)}`);
       expect(outcome.status).toBe('ACCEPTED');
       expect(next % 100n).toBe(0n);
     }
@@ -233,8 +236,13 @@ describe('T-024: атомарное ядро ставки', () => {
     const { lotId } = await openSession(1_000);
     const seen: number[] = [];
 
+    // Двое перебивают друг друга по очереди: себя перебивать нельзя (T-025).
     for (let step = 0; step < 5; step += 1) {
-      const outcome = await place(lotId, await bids.nextPriceTiyn(lotId));
+      const outcome = await place(
+        lotId,
+        await bids.nextPriceTiyn(lotId),
+        `bidder-${String(step % 2)}`,
+      );
       if (outcome.status !== 'ACCEPTED') {
         throw new Error(`Ставка ${String(step)} отклонена: ${outcome.code}`);
       }

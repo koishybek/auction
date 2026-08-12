@@ -15,6 +15,42 @@ export const SESSION_STATUSES = ['RUNNING', 'FROZEN', 'FINISHED'] as const;
 export type SessionStatusValue = (typeof SESSION_STATUSES)[number];
 
 /**
+ * Почему ставка не принята. Один код на одно условие — клиент по нему решает,
+ * что показать человеку и что предложить сделать дальше.
+ *
+ * Разделены на два класса не для порядка, а по природе: первые проверяются в
+ * PostgreSQL до обращения к состоянию торгов и не зависят от гонки, вторые
+ * решаются атомарно внутри Lua-скрипта и зависят от того, кто успел раньше.
+ */
+export const BID_DENY_CODES = [
+  /** Нет верификации через eGov — доступа к деньгам нет (FR-03). */
+  'EGOV_NOT_VERIFIED',
+  /** Пользователь заблокирован администратором. */
+  'USER_BLOCKED',
+  /** Задаток 10 % не на спецсчёте (FR-12). */
+  'NO_DEPOSIT',
+  /** Продавец не участвует в торгах по собственному лоту. */
+  'SELLER_OWN_LOT',
+] as const;
+export type BidDenyCode = (typeof BID_DENY_CODES)[number];
+
+export const BID_RACE_CODES = [
+  /** По лоту торги не идут. */
+  'NO_SESSION',
+  /** Торги заморожены (SLA Freeze) или уже завершены. */
+  'NOT_RUNNING',
+  /** 50 секунд тишины истекли — ставки больше не принимаются. */
+  'TIMER_EXPIRED',
+  /** Участник уже держит последнюю ставку: перебивать себя нельзя. */
+  'SELF_OUTBID',
+  /** Присланная сумма не равна шагу на момент обработки (QA-04). */
+  'PRICE_MISMATCH',
+] as const;
+export type BidRaceCode = (typeof BID_RACE_CODES)[number];
+
+export type BidRejectCode = BidDenyCode | BidRaceCode;
+
+/**
  * Снимок состояния торгов для клиента.
  *
  * Абсолютного дедлайна здесь нет намеренно: клиент получает остаток в

@@ -1,4 +1,4 @@
-import { SMART_HAMMER_TIMER_MS } from '@auction/shared';
+import { BID_RACE_CODES, SMART_HAMMER_TIMER_MS, type BidRaceCode } from '@auction/shared';
 import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { RedisService } from '../redis/redis.service';
@@ -6,9 +6,6 @@ import type { RedisScript } from '../redis/redis-script';
 
 import { AuctionStateService, STATE_TTL_MS } from './auction-state.service';
 import { NEXT_PRICE_LUA, NOW_MS_LUA } from './lua/primitives';
-
-/** Почему ставка не принята. Один код на одно условие. */
-export type BidRejectCode = 'NO_SESSION' | 'NOT_RUNNING' | 'TIMER_EXPIRED' | 'PRICE_MISMATCH';
 
 export type BidOutcome =
   | {
@@ -18,7 +15,7 @@ export type BidOutcome =
       readonly deadlineMs: number;
       readonly serverTs: number;
     }
-  | { readonly status: 'REJECTED'; readonly code: BidRejectCode };
+  | { readonly status: 'REJECTED'; readonly code: BidRaceCode };
 
 /** Следующая цена по правилам шага. nil, если торгов нет. */
 const NEXT_PRICE = `
@@ -49,7 +46,8 @@ return string.format('%.0f', nextPriceTiyn(tonumber(price)))
  */
 const PLACE_BID = `
 ${NEXT_PRICE_LUA}
-local state = redis.call('HMGET', KEYS[1], 'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId')
+local state = redis.call('HMGET', KEYS[1],
+  'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId', 'lastBidderId')
 if not state[1] then
   return { 'NO_SESSION' }
 end
@@ -59,6 +57,19 @@ end
 ${NOW_MS_LUA}
 if nowMs >= tonumber(state[4]) then
   return { 'TIMER_EXPIRED' }
+end
+
+-- Перебивать собственную последнюю ставку запрещено (ТЗ, self-outbid).
+--
+-- Проверка стоит ЗДЕСЬ, а не до вызова скрипта, как предлагает план: снаружи
+-- она читает состояние отдельным запросом, и между чтением и записью
+-- участник успевает стать последним. Тогда запрет обходится двойным кликом —
+-- а это накрутка цены на собственном лоте. Внутри скрипта окна не существует.
+--
+-- Раньше сверки суммы намеренно: «вы и так лидируете» полезнее для человека,
+-- чем «цена изменилась», хотя формально верно и то и другое.
+if state[6] == ARGV[2] then
+  return { 'SELF_OUTBID' }
 end
 
 local nextTiyn = nextPriceTiyn(tonumber(state[2]))
@@ -204,13 +215,12 @@ function parseOutcome(raw: unknown): BidOutcome {
       serverTs: Number(parts[4] ?? '0'),
     };
   }
-  if (
-    code === 'NO_SESSION' ||
-    code === 'NOT_RUNNING' ||
-    code === 'TIMER_EXPIRED' ||
-    code === 'PRICE_MISMATCH'
-  ) {
+  if (isRaceCode(code)) {
     return { status: 'REJECTED', code };
   }
   throw new Error(`Скрипт ставки вернул неизвестный код: ${String(code)}`);
+}
+
+function isRaceCode(value: string | undefined): value is BidRaceCode {
+  return BID_RACE_CODES.includes(value as BidRaceCode);
 }

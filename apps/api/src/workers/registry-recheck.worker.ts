@@ -64,13 +64,7 @@ export class RegistryRecheckWorker implements OnModuleInit, OnModuleDestroy {
       prefix,
     });
 
-    // upsert, а не add: расписание переживает перезапуск и правку интервала,
-    // и несколько реплик воркера не заводят несколько кронов.
-    await this.queue.upsertJobScheduler(
-      SCHEDULER_DAILY,
-      { every: this.intervalMs },
-      { name: JOB_SWEEP },
-    );
+    await this.ensureSchedule();
 
     this.worker = new Worker(REGISTRY_QUEUE, (job: Job) => this.process(job), {
       connection: this.redis.createQueueConnection('worker:registry'),
@@ -84,6 +78,23 @@ export class RegistryRecheckWorker implements OnModuleInit, OnModuleDestroy {
 
     this.logger.log(
       `Крон реестра поднят: обход раз в ${String(Math.round(this.intervalMs / 60_000))} мин`,
+    );
+  }
+
+  /**
+   * Заявить расписание. Идемпотентно и потому вызывается свободно.
+   *
+   * `upsertJobScheduler`, а не `add`: расписание переживает перезапуск и правку
+   * интервала, а несколько реплик воркера не заводят несколько кронов. Метод
+   * публичный, потому что «расписание должно существовать» — это инвариант,
+   * который проверяется и восстанавливается в любой момент, а не только при
+   * старте процесса: ключи Redis можно потерять, а крон обязан вернуться.
+   */
+  async ensureSchedule(): Promise<void> {
+    await this.requireQueue().upsertJobScheduler(
+      SCHEDULER_DAILY,
+      { every: this.intervalMs },
+      { name: JOB_SWEEP },
     );
   }
 

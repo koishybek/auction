@@ -191,6 +191,11 @@ beforeEach(async () => {
 
 describe('T-020: крон-перепроверка ЕРД', () => {
   it('расписание зарегистрировано на 24 часа', async () => {
+    // Заявляем перед проверкой: соседние прогоны чистят Redis по своему
+    // префиксу и могут снести ключи очереди. Крон обязан возвращаться в любой
+    // момент, а не только при старте процесса, — это и проверяется.
+    await worker.ensureSchedule();
+
     const schedulers = await inspectQueue.getJobSchedulers();
     const daily = schedulers.find((item) => item.key === SCHEDULER_DAILY);
 
