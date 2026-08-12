@@ -136,6 +136,11 @@ model Lot {
   startPriceTiyn   BigInt  @map("start_price_tiyn")
   currentPriceTiyn BigInt? @map("current_price_tiyn")
 
+  /// Просмотры карточки (T-017). Прирост копится в Redis и сбрасывается сюда
+  /// пачками: инкремент на каждый заход в PostgreSQL — это блокировка строки
+  /// лота, за которую в Фазе III дерётся вся торговая сессия.
+  viewsCount Int @default(0) @map("views_count")
+
   vetoDeadlineAt DateTime? @map("veto_deadline_at") @db.Timestamptz(3)
   /// Цифровой карантин после ВЕТО: до этого момента лот заново не выставить (FR-17).
   lockoutUntil   DateTime? @map("lockout_until") @db.Timestamptz(3)

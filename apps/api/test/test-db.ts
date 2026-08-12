@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { config as loadEnv } from 'dotenv';
 
 import type { PrismaService } from '../src/prisma/prisma.service';
+import type { RedisService } from '../src/redis/redis.service';
 
 /**
  * Отдельная база для e2e. Прогон тестов чистит таблицы, поэтому запускать их
@@ -65,6 +66,25 @@ export async function cleanDatabase(prisma: PrismaService): Promise<void> {
   await prisma.notification.deleteMany();
   await prisma.authSession.deleteMany();
   await prisma.user.deleteMany();
+}
+
+/**
+ * Убрать ключи прогона из Redis.
+ *
+ * Только своё пространство имён и только через SCAN: FLUSHDB снёс бы всё, что
+ * есть в инстансе, а разработка и тесты ходят в один и тот же Redis. SCAN не
+ * блокирует сервер, в отличие от KEYS.
+ */
+export async function cleanRedis(redis: RedisService): Promise<void> {
+  const pattern = `${redis.key()}:*`;
+  let cursor = '0';
+  do {
+    const [next, keys] = await redis.client.scan(cursor, 'MATCH', pattern, 'COUNT', 500);
+    if (keys.length > 0) {
+      await redis.client.del(...keys);
+    }
+    cursor = next;
+  } while (cursor !== '0');
 }
 
 /**

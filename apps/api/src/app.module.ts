@@ -14,6 +14,7 @@ import { validateEnv, type Env } from './config/env.schema';
 import { HealthModule } from './health/health.module';
 import { LotsModule } from './lots/lots.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { RedisModule } from './redis/redis.module';
 import { TimeModule } from './time/time.module';
 import { UsersModule } from './users/users.module';
 
@@ -77,6 +78,7 @@ import { UsersModule } from './users/users.module';
     }),
 
     PrismaModule,
+    RedisModule,
     CryptoModule,
     TimeModule,
     AuthModule,

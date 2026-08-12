@@ -56,10 +56,33 @@ export const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   API_PORT: z.coerce.number().int().min(1).max(65535).default(3000),
 
+  /**
+   * Сколько доверенных прокси стоит перед API. 0 — никого, адрес клиента берётся
+   * из сокета.
+   *
+   * Число, а не «true»: Express с `trust proxy: true` верит всему X-Forwarded-For
+   * целиком, а его дописывает кто угодно. Клиент отправляет свой заголовок,
+   * попадает первым в списке — и подменяет себе IP, обходя любые ограничения
+   * по адресу. Считать надо ровно столько хопов, сколько их реально стоит
+   * (в проде: Cloudflare + ingress).
+   */
+  TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
+
   DATABASE_URL: connectionUrl('DATABASE_URL'),
   /** Без пулера: Prisma нужны DDL и advisory-локи, через PgBouncer они не работают. */
   DIRECT_URL: connectionUrl('DIRECT_URL'),
   REDIS_URL: connectionUrl('REDIS_URL'),
+  /**
+   * Префикс всех ключей приложения. Разводит стенды и прогон e2e на одном
+   * инстансе: у managed-Redis логической базы под тесты обычно просто нет,
+   * а чистить чужие ключи по SCAN без префикса — значит однажды снести
+   * состояние живых торгов.
+   */
+  REDIS_NAMESPACE: z
+    .string()
+    .min(1)
+    .regex(/^[a-z0-9-]+$/, 'REDIS_NAMESPACE: строчные латинские буквы, цифры и дефис')
+    .default('auction'),
 
   /** Шифрование ПДн (AES-256-GCM). В проде — из KMS, а не из файла. */
   PII_ENCRYPTION_KEY: key32('PII_ENCRYPTION_KEY'),
@@ -92,6 +115,14 @@ export const envSchema = z.object({
    * Временная реализация, пока нет реквизитов S3 — см. integrations/storage.
    */
   STORAGE_LOCAL_ROOT: z.string().min(1).default('.storage'),
+
+  /**
+   * Как часто накопленные в Redis просмотры сбрасываются в PostgreSQL (T-017).
+   * Это операционная ручка: чаще — точнее цифра у продавца, реже — меньше
+   * записей в БД. На корректность не влияет, недосброшенное всё равно
+   * прибавляется к ответу на лету.
+   */
+  LOT_VIEWS_FLUSH_MS: z.coerce.number().int().min(1_000).default(30_000),
 
   /** Читаемые логи вместо JSON. Только для локальной отладки: в CI и проде — JSON. */
   LOG_PRETTY: z

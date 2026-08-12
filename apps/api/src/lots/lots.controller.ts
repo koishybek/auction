@@ -75,6 +75,17 @@ const AdminTransitionSchema = z
   })
   .strict();
 
+/**
+ * Что нужно от запроса, чтобы узнать посетителя. `ip` даёт Express: с нулём
+ * доверенных прокси — адрес сокета, за ingress — разобранный X-Forwarded-For
+ * (см. TRUST_PROXY_HOPS).
+ */
+interface ViewRequest {
+  readonly user?: AuthenticatedUser;
+  readonly ip?: string;
+  readonly headers: { readonly 'user-agent'?: string };
+}
+
 class CreateLotDto extends createZodDto(CreateLotSchema) {}
 class UpdateLotDto extends createZodDto(UpdateLotSchema) {}
 class ListLotsDto extends createZodDto(ListLotsSchema) {}
@@ -115,6 +126,32 @@ export class LotsController {
     @Req() req: { user?: AuthenticatedUser },
   ): Promise<LotView> {
     return this.lots.getById(lotId, req.user ?? null);
+  }
+
+  /**
+   * Отметка просмотра. Отдельная ручка, а не побочный эффект GET, по двум причинам.
+   *
+   * Первая — техническая и решающая: каталог рендерится на сервере, и карточку у
+   * API запрашивает Next, а не браузер. Считая просмотры на GET, мы видели бы
+   * адрес одного и того же SSR-процесса и посчитали бы за час ровно один заход
+   * на всех посетителей.
+   *
+   * Вторая — GET обязан быть безопасным: обход поисковика или префетч ссылки
+   * не должны менять состояние.
+   */
+  @Public()
+  @Post(':id/view')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Отметить просмотр карточки (не чаще раза в час на посетителя)' })
+  recordView(
+    @Param('id', ParseUUIDPipe) lotId: string,
+    @Req() req: ViewRequest,
+  ): Promise<{ readonly counted: boolean }> {
+    return this.lots.recordView(lotId, req.user ?? null, {
+      userId: req.user?.id ?? null,
+      ip: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
   }
 
   @Roles('SELLER')

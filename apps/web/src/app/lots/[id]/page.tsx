@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { PhaseRatchet, phaseLabel } from '@/components/phase-ratchet';
+import { ViewBeacon } from '@/components/view-beacon';
 import { getLot } from '@/lib/api-client';
 import { formatTenge, identifierLabel, lotTypeLabel, nextBidTenge } from '@/lib/format';
 
@@ -49,6 +50,8 @@ export default async function LotPage({ params }: PageProps) {
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-16">
+      <ViewBeacon lotId={lot.id} />
+
       <nav aria-label="Навигация" className="mb-10">
         <Link href="/" className="eyebrow transition-colors hover:text-[var(--color-paper)]">
           ← Все лоты

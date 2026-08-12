@@ -1,4 +1,5 @@
 import type { INestApplication } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { HttpAdapterHost } from '@nestjs/core';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import type { Application } from 'express';
@@ -6,6 +7,7 @@ import { Logger } from 'nestjs-pino';
 import { cleanupOpenApiDoc } from 'nestjs-zod';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import type { Env } from './config/env.schema';
 
 /**
  * Общая настройка приложения для прода и для e2e.
@@ -36,6 +38,18 @@ export function configureApp(app: INestApplication, options?: { shutdownHooks?: 
   // Не сообщаем внешнему миру, на чём работаем: бесплатная подсказка для сканеров.
   const expressApp = app.getHttpAdapter().getInstance() as Application;
   expressApp.disable('x-powered-by');
+
+  /**
+   * Сколько прокси перед нами — столько последних записей X-Forwarded-For и
+   * считаются доверенными. Ноль (умолчание) означает «адрес берём из сокета».
+   *
+   * Именно число, а не `true`: заголовок дописывает кто угодно, включая самого
+   * клиента. При `trust proxy: true` Express возьмёт самую левую запись — ту,
+   * которую прислал клиент, — и подмена адреса становится однострочником.
+   * От адреса зависят антинакрутка просмотров и лимит ставок (FR-10).
+   */
+  const config = app.get<ConfigService<Env, true>>(ConfigService);
+  expressApp.set('trust proxy', config.get('TRUST_PROXY_HOPS', { infer: true }));
 }
 
 /** OpenAPI. В e2e не нужен, поэтому отдельно от configureApp. */

@@ -8,9 +8,30 @@ import type { NextConfig } from 'next';
 loadEnv({ path: resolve(import.meta.dirname, '../../.env') });
 
 const apiPort = process.env['API_PORT'] ?? '3100';
+const apiBaseUrl = process.env['API_BASE_URL'] ?? `http://127.0.0.1:${apiPort}`;
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+
+  // Next по умолчанию генерирует свои AGENTS.md и CLAUDE.md рядом с пакетом.
+  // Инструкция проекта одна и лежит в корне (CLAUDE.md): второй файл внутри
+  // apps/web подменял бы её правилами о Next вместо правил о деньгах и торгах.
+  agentRules: false,
+
+  /**
+   * В проде ingress отдаёт /api в сервис API, а / — в web, поэтому браузер
+   * обращается к API по относительному пути. В разработке ingress'а нет, и его
+   * роль играет этот rewrite: клиентский код одинаков на обоих контурах и не
+   * знает адреса API.
+   *
+   * Оговорка: через rewrite запрос идёт транзитом через Next, и API видит его
+   * адрес, а не адрес посетителя. Для антинакрутки просмотров это значит, что
+   * в разработке все анонимы — один посетитель. В проде запрос идёт в API
+   * напрямую, а адрес разбирается из X-Forwarded-For (см. TRUST_PROXY_HOPS).
+   */
+  rewrites() {
+    return Promise.resolve([{ source: '/api/:path*', destination: `${apiBaseUrl}/api/:path*` }]);
+  },
 
   // Пакет воркспейса собирается в CJS; Next должен прогнать его через свой конвейер.
   transpilePackages: ['@auction/shared'],

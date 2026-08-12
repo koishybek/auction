@@ -23,6 +23,12 @@ export default defineConfig({
       DATABASE_URL: databaseUrl,
       DIRECT_URL: databaseUrl,
       STORAGE_LOCAL_ROOT: TEST_STORAGE_ROOT,
+      // Свои ключи в том же Redis, что и разработка: отдельной логической базы
+      // у managed-инстансов обычно нет, а сносить ключи разработчика нельзя.
+      REDIS_NAMESPACE: 'auction-e2e',
+      // Сброс просмотров в тестах вызывается явно. Фоновый таймер за спиной
+      // теста уносил бы накопленное в БД посреди проверки.
+      LOT_VIEWS_FLUSH_MS: '3600000',
     },
   },
 });

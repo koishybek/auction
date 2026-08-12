@@ -23,14 +23,22 @@ import { REGISTRY_PROVIDER, type RegistryProvider } from '../integrations/regist
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
+import { LotViewsService, type ViewerIdentity } from './lot-views.service';
 import {
   checkTransition,
   transitionDescription,
   type LotTransitionActor,
 } from './lot-status.machine';
 
-/** Сущность Prisma → DTO на провод. Тиыны → тенге ровно здесь, на границе. */
-function toView(lot: Lot): LotView {
+/**
+ * Сущность Prisma → DTO на провод. Тиыны → тенге ровно здесь, на границе.
+ *
+ * `viewsCount` передаётся отдельным аргументом, а не берётся из строки лота:
+ * решение «показывать ли эту цифру» принимает вызывающий, который знает, кто
+ * смотрит. Значение по умолчанию — null, то есть «не показывать»: забытый
+ * вызов молча скроет цифру, а не покажет лишнее.
+ */
+function toView(lot: Lot, viewsCount: number | null = null): LotView {
   return {
     id: lot.id,
     type: lot.type,
@@ -40,6 +48,7 @@ function toView(lot: Lot): LotView {
     currentPriceTenge:
       lot.currentPriceTiyn === null ? null : Number(toTenge(tiyn(lot.currentPriceTiyn))),
     sellerId: lot.sellerId,
+    viewsCount,
     createdAt: lot.createdAt.toISOString(),
     updatedAt: lot.updatedAt.toISOString(),
   };
@@ -51,6 +60,7 @@ export class LotsService {
     private readonly prisma: PrismaService,
     private readonly time: TimeService,
     private readonly pii: PiiCryptoService,
+    private readonly views: LotViewsService,
     @Inject(REGISTRY_PROVIDER) private readonly registry: RegistryProvider,
   ) {}
 
@@ -69,7 +79,8 @@ export class LotsService {
         startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)),
       },
     });
-    return toView(lot);
+    // Пишущие ручки доступны только владельцу и админу — им цифра положена.
+    return toView(lot, lot.viewsCount);
   }
 
   /** Правка только собственного ЧЕРНОВИКА: после модерации параметры заморожены. */
@@ -98,7 +109,7 @@ export class LotsService {
           : { startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)) }),
       },
     });
-    return toView(updated);
+    return toView(updated, updated.viewsCount);
   }
 
   /**
@@ -119,7 +130,33 @@ export class LotsService {
       // 404, а не 403: не подтверждаем сам факт существования чужого черновика.
       throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
     }
-    return toView(lot);
+
+    if (!isOwner && !isAdmin) {
+      return toView(lot);
+    }
+    const totals = await this.views.withPending([lot]);
+    return toView(lot, totals.get(lot.id) ?? lot.viewsCount);
+  }
+
+  /**
+   * Засчитать просмотр карточки.
+   *
+   * Видимость проверяется той же логикой, что и чтение: накрутить счётчик
+   * чужому черновику нельзя, потому что его и увидеть нельзя.
+   *
+   * Собственные заходы продавца не считаются: цифра нужна ему как мера чужого
+   * интереса, а не как счётчик своих обновлений страницы.
+   */
+  async recordView(
+    lotId: string,
+    viewer: AuthenticatedUser | null,
+    client: ViewerIdentity,
+  ): Promise<{ readonly counted: boolean }> {
+    const lot = await this.getById(lotId, viewer);
+    if (viewer !== null && viewer.id === lot.sellerId) {
+      return { counted: false };
+    }
+    return { counted: await this.views.record(lot.id, client) };
   }
 
   /** Публичный каталог: только публичные статусы, свежие сверху. */
@@ -150,10 +187,17 @@ export class LotsService {
       this.prisma.lot.count({ where }),
     ]);
 
-    return { items: lots.map(toView), total, page: input.page, pageSize: input.pageSize };
+    // Стрелка обязательна: map передаёт вторым аргументом индекс, и он приехал
+    // бы в viewsCount — первый лот каталога показал бы посторонним «0 просмотров».
+    return {
+      items: lots.map((lot) => toView(lot)),
+      total,
+      page: input.page,
+      pageSize: input.pageSize,
+    };
   }
 
-  /** Лоты продавца — все статусы, включая черновики. */
+  /** Лоты продавца — все статусы, включая черновики, и просмотры по каждому. */
   async listMine(sellerId: string, page: number, pageSize: number): Promise<LotListView> {
     const where = { sellerId };
     const [lots, total] = await Promise.all([
@@ -165,7 +209,14 @@ export class LotsService {
       }),
       this.prisma.lot.count({ where }),
     ]);
-    return { items: lots.map(toView), total, page, pageSize };
+
+    const totals = await this.views.withPending(lots);
+    return {
+      items: lots.map((lot) => toView(lot, totals.get(lot.id) ?? lot.viewsCount)),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   /**
@@ -274,7 +325,7 @@ export class LotsService {
     });
 
     const fresh = await this.prisma.lot.findUniqueOrThrow({ where: { id: lot.id } });
-    return toView(fresh);
+    return toView(fresh, fresh.viewsCount);
   }
 
   private async requireOwnLot(lotId: string, sellerId: string): Promise<Lot> {

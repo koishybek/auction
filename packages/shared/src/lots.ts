@@ -36,6 +36,11 @@ export interface LotView {
   readonly startPriceTenge: number;
   readonly currentPriceTenge: number | null;
   readonly sellerId: string;
+  /**
+   * Просмотры карточки. `null` — смотрящему эта цифра не положена: интерес к
+   * лоту видят только владелец и админ, конкуренты по торгам — нет.
+   */
+  readonly viewsCount: number | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

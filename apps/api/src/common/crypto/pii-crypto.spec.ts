@@ -10,6 +10,7 @@ import {
   normalizeForIndex,
   parseKey,
   PiiCryptoError,
+  pseudonym,
 } from './pii-crypto';
 
 const KEY = randomBytes(32);
@@ -122,5 +123,39 @@ describe('blind index — поиск по зашифрованному полю'
     expect(blindIndexEquals(a, blindIndex('900101300124', INDEX_KEY))).toBe(false);
     expect(blindIndexEquals(a, '')).toBe(false);
     expect(blindIndexEquals('', '')).toBe(false);
+  });
+});
+
+describe('pseudonym', () => {
+  const FINGERPRINT = '203.0.113.7|Mozilla/5.0';
+
+  it('одинаковый вход даёт одинаковый псевдоним', () => {
+    expect(pseudonym(FINGERPRINT, INDEX_KEY, 'lot_views.viewer')).toBe(
+      pseudonym(FINGERPRINT, INDEX_KEY, 'lot_views.viewer'),
+    );
+  });
+
+  it('разные домены разводят один и тот же вход', () => {
+    // Иначе по совпадению псевдонимов две подсистемы связываются между собой.
+    expect(pseudonym(FINGERPRINT, INDEX_KEY, 'lot_views.viewer')).not.toBe(
+      pseudonym(FINGERPRINT, INDEX_KEY, 'antibot.client'),
+    );
+  });
+
+  it('склейка домена и значения однозначна', () => {
+    // Без разделителя ('ab' + 'c') и ('a' + 'bc') дали бы один хеш.
+    expect(pseudonym('c', INDEX_KEY, 'ab')).not.toBe(pseudonym('bc', INDEX_KEY, 'a'));
+  });
+
+  it('не совпадает с blind index того же значения', () => {
+    expect(pseudonym(IIN, INDEX_KEY, 'lot_views.viewer')).not.toBe(
+      blindIndex(IIN, INDEX_KEY).slice(0, 32),
+    );
+  });
+
+  it('не пропускает ключ неверной длины', () => {
+    expect(() => pseudonym(FINGERPRINT, randomBytes(31), 'lot_views.viewer')).toThrow(
+      PiiCryptoError,
+    );
   });
 });

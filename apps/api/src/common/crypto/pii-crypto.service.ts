@@ -3,7 +3,14 @@ import { ConfigService } from '@nestjs/config';
 
 import type { Env } from '../../config/env.schema';
 
-import { blindIndex, decryptPii, encryptPii, parseKey, type PiiPurpose } from './pii-crypto';
+import {
+  blindIndex,
+  decryptPii,
+  encryptPii,
+  parseKey,
+  pseudonym as pseudonymOf,
+  type PiiPurpose,
+} from './pii-crypto';
 
 /**
  * Обёртка над примитивами шифрования ПДн: держит ключи и не даёт разбрестись
@@ -49,6 +56,14 @@ export class PiiCryptoService {
   /** Индекс для поиска по ИИН — им заполняется колонка `users.iin_blind_idx`. */
   index(value: string): string {
     return blindIndex(value, this.indexKey);
+  }
+
+  /**
+   * Псевдоним для узнавания повторов без хранения исходника (IP+User-Agent
+   * в антинакрутке просмотров). Домен разводит назначения между собой.
+   */
+  pseudonym(value: string, domain: string): string {
+    return pseudonymOf(value, this.indexKey, domain);
   }
 
   /** Шифрует значение и сразу отдаёт индекс: два поля всегда пишутся вместе. */

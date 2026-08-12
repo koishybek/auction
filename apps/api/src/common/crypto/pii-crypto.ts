@@ -137,6 +137,29 @@ export function blindIndex(value: string, key: Buffer): string {
   return createHmac('sha256', key).update(normalizeForIndex(value), 'utf8').digest('hex');
 }
 
+/**
+ * Псевдоним значения, которое нельзя хранить открытым, но нужно узнавать повторно.
+ *
+ * Случай — антинакрутка просмотров (T-017): чтобы понять «этот же посетитель уже
+ * был», нужен IP и User-Agent, а хранить их открытыми незачем и нельзя.
+ *
+ * `domain` обязателен и входит в HMAC: без него один и тот же вход давал бы
+ * одинаковый хеш в разных подсистемах, и по совпадению псевдонимов их можно
+ * было бы связать между собой. Разделителем идёт нулевой байт U+0000: в доменах
+ * и значениях он не встречается, поэтому склейка однозначна — («a», «bc») и
+ * («ab», «c») дают разные псевдонимы.
+ *
+ * Обрезка до 128 бит: этого достаточно против коллизий, а короткий ключ дешевле
+ * держать в Redis миллионами штук.
+ */
+export function pseudonym(value: string, key: Buffer, domain: string): string {
+  assertKey(key, 'ключ blind index');
+  return createHmac('sha256', key)
+    .update(`${domain}\u0000${normalizeForIndex(value)}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+}
+
 /** Сравнение индексов за постоянное время — чтобы не отдавать информацию таймингом. */
 export function blindIndexEquals(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'hex');
