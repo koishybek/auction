@@ -1,10 +1,11 @@
 import { createServer, type Server } from 'node:http';
 
-import type { StateSnapshotEvent, WsErrorCode } from '@auction/shared';
+import type { StateSnapshotEvent, TimerTickEvent, WsErrorCode } from '@auction/shared';
 import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WebSocketServer, type WebSocket } from 'ws';
 
+import { AuctionStateService } from '../auction/auction-state.service';
 import { AuctionService } from '../auction/auction.service';
 import { TokenService } from '../auth/token.service';
 import type { Env } from '../config/env.schema';
@@ -21,6 +22,15 @@ const MAX_FRAME_BYTES = 4 * 1024;
 
 /** Как часто проверяется живость соединения. */
 const HEARTBEAT_MS = 15_000;
+
+/**
+ * Период тика таймера. 1000 мс задано ТЗ §2.1 и FR-02 — не настройка.
+ *
+ * Тикает каждый инстанс по своим комнатам: координировать их незачем, значение
+ * всё равно берётся с часов Redis. Разъехаться могут только фазы тиков — на
+ * величину меньше одного периода, что DoD и допускает.
+ */
+const TIMER_TICK_MS = 1_000;
 
 /**
  * Сколько комнат может держать одно соединение. Смотреть десяток лотов
@@ -54,11 +64,13 @@ export class WsGatewayService implements OnModuleDestroy {
   private http: Server | null = null;
   private wss: WebSocketServer | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
+  private ticker: NodeJS.Timeout | null = null;
   private nextId = 1;
 
   constructor(
     private readonly rooms: LotRoomsService,
     private readonly auction: AuctionService,
+    private readonly state: AuctionStateService,
     private readonly tokens: TokenService,
     private readonly time: TimeService,
     config: ConfigService<Env, true>,
@@ -109,6 +121,17 @@ export class WsGatewayService implements OnModuleDestroy {
       this.sweep();
     }, HEARTBEAT_MS);
     this.heartbeat.unref();
+
+    this.ticker = setInterval(() => {
+      void this.broadcastTimers().catch((error: unknown) => {
+        // Пропущенный тик — не повод ронять gateway: следующий придёт через
+        // секунду, а клиент и так знает, что остаток убывает.
+        this.logger.warn(
+          `Тик таймера не отправлен: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      });
+    }, TIMER_TICK_MS);
+    this.ticker.unref();
 
     const actual = addressPort(http) ?? port;
     this.logger.log(`WS-gateway слушает :${String(actual)}`);
@@ -212,6 +235,35 @@ export class WsGatewayService implements OnModuleDestroy {
     await this.rooms.leaveAll(connection);
   }
 
+  /**
+   * Разослать остаток таймера во все свои комнаты (T-026).
+   *
+   * Остаток берётся из авторитетного дедлайна в Redis и считается там же —
+   * клиент получает готовое число и никогда не считает его сам. Локальный
+   * обратный отсчёт в браузере разошёлся бы с сервером на дрейф часов и на
+   * задержку вкладки в фоне, а на пятидесяти секундах это решает исход торгов.
+   *
+   * Один запрос на тик независимо от числа комнат: сто активных лотов не
+   * должны означать сто обращений в Redis каждую секунду с каждого инстанса.
+   */
+  private async broadcastTimers(): Promise<void> {
+    const lotIds = this.rooms.activeLots();
+    if (lotIds.length === 0) {
+      return;
+    }
+
+    for (const timer of await this.state.readTimers(lotIds)) {
+      const tick: TimerTickEvent = {
+        event: 'timer_tick',
+        lot_id: timer.lotId,
+        time_remaining_ms: timer.timeRemainingMs,
+        server_ts: timer.nowMs,
+        seq: timer.seq,
+      };
+      this.rooms.broadcast(timer.lotId, JSON.stringify(tick));
+    }
+  }
+
   /** Разослать ping и закрыть тех, кто не ответил на предыдущий. */
   private sweep(): void {
     const ping = JSON.stringify({ event: 'ping', server_ts: this.time.wallClockMs() });
@@ -235,6 +287,10 @@ export class WsGatewayService implements OnModuleDestroy {
     if (this.heartbeat !== null) {
       clearInterval(this.heartbeat);
       this.heartbeat = null;
+    }
+    if (this.ticker !== null) {
+      clearInterval(this.ticker);
+      this.ticker = null;
     }
     for (const connection of this.connections) {
       connection.socket.terminate();

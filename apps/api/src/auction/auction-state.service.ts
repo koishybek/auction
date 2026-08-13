@@ -67,6 +67,32 @@ table.insert(state, string.format('%.0f', nextPriceTiyn(tonumber(redis.call('HGE
 return state
 `;
 
+/**
+ * Остатки таймера сразу по многим лотам, одним снимком часов.
+ *
+ * Тикер вещает раз в секунду в каждую комнату, и походом за каждым лотом
+ * отдельно gateway превратился бы в генератор запросов: сотня активных лотов —
+ * сотня round-trip'ов ежесекундно на каждом инстансе. Здесь один вызов и одно
+ * «сейчас» на всех: значения гарантированно сняты одним и тем же часами.
+ *
+ * KEYS — ключи состояний. Ответ: [nowMs, (lotKey, status, deadlineMs, seq)…],
+ * лоты без состояния в ответ не попадают.
+ */
+const READ_TIMERS = `
+${NOW_MS_LUA}
+local out = { string.format('%.0f', nowMs) }
+for i = 1, #KEYS do
+  local s = redis.call('HMGET', KEYS[i], 'status', 'deadlineMs', 'seq')
+  if s[1] then
+    out[#out + 1] = KEYS[i]
+    out[#out + 1] = s[1]
+    out[#out + 1] = s[2]
+    out[#out + 1] = s[3]
+  end
+end
+return out
+`;
+
 /** Восстановить состояние из PostgreSQL, если ключ потерян. Не трогает существующий. */
 const RESTORE_STATE = `
 if redis.call('EXISTS', KEYS[1]) == 1 then
@@ -97,6 +123,20 @@ export interface AuctionState {
 }
 
 /**
+ * Остаток таймера одного лота. Урезанный срез состояния: тикеру не нужны ни
+ * цена, ни id сессии, а гонять их раз в секунду по всем комнатам — лишний
+ * трафик на пустом месте.
+ */
+export interface AuctionTimer {
+  readonly lotId: string;
+  readonly status: SessionStatusValue;
+  readonly seq: number;
+  /** Уже посчитан на часах Redis и никогда не отрицателен. */
+  readonly timeRemainingMs: number;
+  readonly nowMs: number;
+}
+
+/**
  * Состояние торгов в Redis (T-022).
  *
  * Redis здесь авторитет: цена, дедлайн, seq и статус во время сессии живут
@@ -108,11 +148,13 @@ export interface AuctionState {
 export class AuctionStateService {
   private readonly startScript: RedisScript;
   private readonly readScript: RedisScript;
+  private readonly timersScript: RedisScript;
   private readonly restoreScript: RedisScript;
 
   constructor(private readonly redis: RedisService) {
     this.startScript = redis.script(START_SESSION);
     this.readScript = redis.script(READ_STATE);
+    this.timersScript = redis.script(READ_TIMERS);
     this.restoreScript = redis.script(RESTORE_STATE);
   }
 
@@ -180,6 +222,49 @@ export class AuctionStateService {
       ],
     );
     return written === 1;
+  }
+
+  /**
+   * Остатки таймера по списку лотов. Лоты без торгов в ответе отсутствуют.
+   *
+   * Остаток считается здесь, а не у вызывающего: «сейчас» и дедлайн обязаны
+   * быть с одних часов, иначе на разных инстансах gateway участники увидят
+   * разное время до закрытия одного и того же лота (NFR-04).
+   */
+  async readTimers(lotIds: readonly string[]): Promise<AuctionTimer[]> {
+    if (lotIds.length === 0) {
+      return [];
+    }
+
+    const raw = await this.timersScript.run(
+      lotIds.map((lotId) => this.stateKey(lotId)),
+      [],
+    );
+    const flat = asStringArray(raw);
+    const nowMs = Number(flat[0]);
+    const timers: AuctionTimer[] = [];
+
+    for (let i = 1; i + 3 < flat.length + 1; i += 4) {
+      const key = flat[i];
+      const status = flat[i + 1];
+      if (key === undefined || status === undefined) {
+        break;
+      }
+      if (status !== 'RUNNING' && status !== 'FROZEN' && status !== 'FINISHED') {
+        continue;
+      }
+      const deadlineMs = Number(flat[i + 2] ?? '0');
+      timers.push({
+        lotId: key.slice(key.lastIndexOf(':') + 1),
+        status,
+        seq: Number(flat[i + 3] ?? '0'),
+        // Отрицательного остатка не бывает: «минус три секунды» на экране
+        // означали бы, что торги идут после закрытия.
+        timeRemainingMs: Math.max(0, deadlineMs - nowMs),
+        nowMs,
+      });
+    }
+    return timers;
   }
 
   /** Снять состояние. Нужен закрытию торгов и уборке в тестах. */

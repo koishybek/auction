@@ -287,16 +287,22 @@ async function main(): Promise<void> {
   const root = findRepoRoot(process.cwd());
   const envPath = resolve(root, '.env');
 
-  if (!existsSync(envPath)) {
-    console.error(`\n.env не найден: ${envPath}\n`);
-    console.error('Заполни окружение:');
-    console.error('  1. cp .env.example .env');
-    console.error('  2. вставь DATABASE_URL / DIRECT_URL (Neon) и REDIS_URL (Redis Cloud)');
-    console.error('  3. пошагово — docs/dev-setup.md\n');
-    process.exitCode = 1;
-    return;
+  /**
+   * Файл `.env` — удобство разработчика, а не источник истины.
+   *
+   * Есть — подхватываем; нет — берём то, что уже в окружении. Именно так живут
+   * CI и кластер: переменные приходят из job'а и из секретов, файла там нет и
+   * быть не должно. Требование файла делало проверку окружения неприменимой
+   * ровно там, где она нужнее всего.
+   *
+   * Существующие переменные окружения при этом не перетираются: dotenv по
+   * умолчанию не переопределяет заданное.
+   */
+  const hasEnvFile = existsSync(envPath);
+  if (hasEnvFile) {
+    loadEnv({ path: envPath });
   }
-  loadEnv({ path: envPath });
+  const source = hasEnvFile ? envPath : 'переменные окружения (файла .env нет)';
 
   const required = ['DATABASE_URL', 'DIRECT_URL', 'REDIS_URL'] as const;
   const missing = required.filter((key) => {
@@ -305,14 +311,19 @@ async function main(): Promise<void> {
     return value === undefined || value.trim() === '' || value.includes('PASSWORD');
   });
   if (missing.length > 0) {
-    console.error(`\nНе заполнены переменные в ${envPath}:`);
+    console.error(`\nНе заданы переменные (источник: ${source}):`);
     for (const key of missing) console.error(`  - ${key}`);
-    console.error('\nГде их взять — docs/dev-setup.md\n');
+    if (!hasEnvFile) {
+      console.error('\nЛокально: cp .env.example .env и заполнить. Подробно — docs/dev-setup.md');
+    } else {
+      console.error('\nГде их взять — docs/dev-setup.md');
+    }
+    console.error('');
     process.exitCode = 1;
     return;
   }
 
-  console.log(`\nПроверка dev-окружения (${envPath})\n`);
+  console.log(`\nПроверка окружения (${source})\n`);
 
   const results: CheckResult[] = [
     ...(await checkPostgres('Postgres (пулер)', process.env['DATABASE_URL'] as string, false)),

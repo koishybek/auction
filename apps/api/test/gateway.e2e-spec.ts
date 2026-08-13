@@ -381,6 +381,105 @@ describe('T-023: WS-gateway, комнаты и мост pub/sub', () => {
     }
   });
 
+  it('DoD T-026: остаток таймера на двух инстансах расходится не больше чем на тик', async () => {
+    const { lot } = await lotInAuction();
+    const clientA = await connect(portA);
+    const clientB = await connect(portB);
+
+    try {
+      clientA.send({ event: 'join_lot', lot_id: lot.id });
+      clientB.send({ event: 'join_lot', lot_id: lot.id });
+      await clientA.waitFor('state_snapshot');
+      await clientB.waitFor('state_snapshot');
+
+      // Три секунды — три тика на каждом инстансе.
+      await new Promise((resolve) => setTimeout(resolve, 3_200));
+
+      const ticksA = clientA.messages.filter((m) => m['event'] === 'timer_tick');
+      const ticksB = clientB.messages.filter((m) => m['event'] === 'timer_tick');
+      expect(ticksA.length).toBeGreaterThanOrEqual(2);
+      expect(ticksB.length).toBeGreaterThanOrEqual(2);
+
+      // Оба инстанса вещают из одного авторитетного дедлайна, поэтому
+      // расходиться могут только фазы тиков — меньше чем на один период.
+      const lastA = ticksA[ticksA.length - 1] as Record<string, number>;
+      const lastB = ticksB[ticksB.length - 1] as Record<string, number>;
+      const drift = Math.abs((lastA['time_remaining_ms'] ?? 0) - (lastB['time_remaining_ms'] ?? 0));
+      expect(drift).toBeLessThanOrEqual(1_100);
+
+      // Остаток убывает и никогда не уходит в минус.
+      const firstA = ticksA[0] as Record<string, number>;
+      expect(lastA['time_remaining_ms']).toBeLessThan(firstA['time_remaining_ms'] ?? 0);
+      for (const tick of [...ticksA, ...ticksB]) {
+        expect(tick['time_remaining_ms']).toBeGreaterThanOrEqual(0);
+      }
+
+      // Часы клиента не участвуют: абсолютного дедлайна в кадре нет вовсе,
+      // есть готовый остаток и серверная метка времени.
+      expect(Object.keys(lastA)).toEqual(
+        expect.arrayContaining(['time_remaining_ms', 'server_ts', 'lot_id', 'seq']),
+      );
+      expect(Object.keys(lastA)).not.toContain('deadline_ms');
+      expect(Object.keys(lastA)).not.toContain('deadline_at');
+    } finally {
+      clientA.close();
+      clientB.close();
+    }
+  });
+
+  it('принятая ставка сдвигает остаток обратно к пятидесяти секундам', async () => {
+    const { lot } = await lotInAuction();
+    const client = await connect(portA);
+
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id });
+      await client.waitFor('state_snapshot');
+      await new Promise((resolve) => setTimeout(resolve, 2_200));
+
+      const before = client.messages.filter((m) => m['event'] === 'timer_tick').pop() as Record<
+        string,
+        number
+      >;
+      expect(before['time_remaining_ms']).toBeLessThan(49_000);
+
+      await bids.place({
+        lotId: lot.id,
+        bidderId: 'investor-1',
+        blindCode: 'Инвестор #100',
+        expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+      });
+      await client.waitFor('bid_updated');
+
+      client.messages.length = 0;
+      const after = await client.waitFor('timer_tick');
+      expect(after['time_remaining_ms']).toBeGreaterThan(48_000);
+      expect(after['seq']).toBe(1);
+    } finally {
+      client.close();
+    }
+  });
+
+  it('тики не идут в комнату, из которой все вышли', async () => {
+    const { lot } = await lotInAuction();
+    const client = await connect(portA);
+
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id });
+      await client.waitFor('state_snapshot');
+      await client.waitFor('timer_tick');
+
+      client.send({ event: 'leave_lot', lot_id: lot.id });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      client.messages.length = 0;
+
+      // Пустая комната закрывается — вещать некому и незачем.
+      await new Promise((resolve) => setTimeout(resolve, 2_200));
+      expect(client.messages.filter((m) => m['event'] === 'timer_tick')).toHaveLength(0);
+    } finally {
+      client.close();
+    }
+  });
+
   it('проба живости отвечает на обоих инстансах', async () => {
     for (const port of [portA, portB]) {
       const response = await fetch(`http://127.0.0.1:${String(port)}/health`);

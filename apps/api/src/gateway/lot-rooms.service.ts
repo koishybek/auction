@@ -50,6 +50,16 @@ export class LotRoomsService implements OnModuleDestroy {
     return this.rooms.size;
   }
 
+  /** Лоты, за которыми следит этот инстанс. Тикеру — список, кому вещать. */
+  activeLots(): string[] {
+    return [...this.rooms.keys()];
+  }
+
+  /** Разослать готовый кадр всем в комнате. */
+  broadcast(lotId: string, payload: string): void {
+    this.sendToRoom(lotId, payload);
+  }
+
   async join(lotId: string, member: RoomMember): Promise<void> {
     let room = this.rooms.get(lotId);
     if (room === undefined) {
@@ -91,7 +101,10 @@ export class LotRoomsService implements OnModuleDestroy {
    * на горячем пути, где SLA на рассылку 5 мс.
    */
   private deliver(channel: string, payload: string): void {
-    const lotId = channel.slice(channel.lastIndexOf(':') + 1);
+    this.sendToRoom(channel.slice(channel.lastIndexOf(':') + 1), payload);
+  }
+
+  private sendToRoom(lotId: string, payload: string): void {
     const room = this.rooms.get(lotId);
     if (room === undefined) {
       return;

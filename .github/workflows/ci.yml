@@ -38,6 +38,14 @@ jobs:
       - name: Генерация клиента Prisma
         run: pnpm db:generate
 
+      # Обязательно ДО линтера и типов. @auction/shared резолвится через
+      # dist/index.d.ts, и в чистом клоне его нет: правила ESLint, работающие с
+      # типами, разом теряют все типы из пакета и валят прогон сотнями ошибок
+      # «cannot be resolved». На машине разработчика dist остаётся с прошлых
+      # сборок, поэтому локально этого не видно — именно так и вышло.
+      - name: Сборка общих пакетов
+        run: pnpm --filter @auction/shared build
+
       - name: Проверка форматирования
         run: pnpm format:check
 
@@ -109,8 +117,13 @@ jobs:
       - name: Генерация клиента Prisma
         run: pnpm db:generate
 
+      # Тесты импортируют @auction/shared по dist — в чистом клоне его нет.
+      - name: Сборка общих пакетов
+        run: pnpm --filter @auction/shared build
+
       # Проверка окружения гоняется до тестов: если Redis не умеет EVAL или
       # PTTL в миллисекундах, лучше узнать здесь, а не на Phase 3.
+      # Файла .env здесь нет — переменные приходят из env job'а выше.
       - name: Проверка окружения
         run: pnpm check:env
 

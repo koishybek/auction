@@ -65,6 +65,23 @@ export interface BidUpdatedEvent {
   readonly session_id: string;
 }
 
+/**
+ * Тик таймера, раз в 1000 мс (ТЗ §2.1, FR-02).
+ *
+ * `time_remaining_ms` уже посчитан сервером. Клиент его показывает, а не
+ * пересчитывает: собственный обратный отсчёт разъедется с сервером на дрейф
+ * часов и на заморозку вкладки в фоне, а на пятидесяти секундах это решает
+ * исход торгов.
+ */
+export interface TimerTickEvent {
+  readonly event: 'timer_tick';
+  readonly lot_id: string;
+  readonly time_remaining_ms: number;
+  readonly server_ts: number;
+  /** Номер последней принятой ставки — по нему клиент замечает пропуск. */
+  readonly seq: number;
+}
+
 /** Отказ. Код машинный, message — для человека и логов. */
 export interface WsErrorEvent {
   readonly event: 'error';
