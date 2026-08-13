@@ -34,20 +34,23 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 
 # ─── Рантайм ─────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime
-RUN corepack enable && \
-    addgroup -g 1000 -S app && adduser -u 1000 -S app -G app
+# Своего пользователя не заводим: в образе node уже есть непривилегированный
+# `node` с UID и GID 1000 — ровно теми, что просит securityContext в чарте
+# (runAsUser: 1000, fsGroup: 1000). Попытка создать рядом ещё одного с тем же
+# gid валит сборку («gid in use»).
+RUN corepack enable
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY --from=build --chown=app:app /runtime/node_modules ./node_modules
-COPY --from=build --chown=app:app /app/apps/api/dist ./dist
-COPY --from=build --chown=app:app /app/apps/api/package.json ./package.json
+COPY --from=build --chown=node:node /runtime/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/apps/api/dist ./dist
+COPY --from=build --chown=node:node /app/apps/api/package.json ./package.json
 # Миграции нужны образу: их накатывает Job из Helm-чарта этим же образом.
-COPY --from=build --chown=app:app /app/apps/api/prisma ./prisma
-COPY --from=build --chown=app:app /app/apps/api/prisma.config.ts ./prisma.config.ts
+COPY --from=build --chown=node:node /app/apps/api/prisma ./prisma
+COPY --from=build --chown=node:node /app/apps/api/prisma.config.ts ./prisma.config.ts
 
-USER app
+USER node
 EXPOSE 3100
 
 # Проба живости в самом образе — на случай запуска вне Kubernetes.

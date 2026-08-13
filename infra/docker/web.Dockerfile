@@ -23,19 +23,21 @@ COPY apps/web apps/web
 RUN pnpm --filter @auction/shared build && pnpm --filter @auction/web build
 
 FROM node:22-alpine AS runtime
-RUN corepack enable && \
-    addgroup -g 1000 -S app && adduser -u 1000 -S app -G app
+# Своего пользователя не заводим: в образе node уже есть непривилегированный
+# `node` с UID и GID 1000 — ровно теми, что просит securityContext в чарте.
+# Попытка создать рядом ещё одного с тем же gid валит сборку («gid in use»).
+RUN corepack enable
 WORKDIR /app
 
 ENV NODE_ENV=production
 ENV WEB_PORT=3101
 
-COPY --from=build --chown=app:app /app/node_modules ./node_modules
-COPY --from=build --chown=app:app /app/packages/shared packages/shared
-COPY --from=build --chown=app:app /app/apps/web apps/web
-COPY --from=build --chown=app:app /app/package.json /app/pnpm-workspace.yaml ./
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/packages/shared packages/shared
+COPY --from=build --chown=node:node /app/apps/web apps/web
+COPY --from=build --chown=node:node /app/package.json /app/pnpm-workspace.yaml ./
 
-USER app
+USER node
 WORKDIR /app/apps/web
 EXPOSE 3101
 
