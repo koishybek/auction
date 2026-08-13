@@ -37,6 +37,7 @@ redis.call('HSET', KEYS[1],
   'seq', '0',
   'deadlineMs', string.format('%.0f', deadlineMs))
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[4]))
+redis.call('ZADD', KEYS[2], deadlineMs, ARGV[5])
 return { string.format('%.0f', nowMs), string.format('%.0f', deadlineMs) }
 `;
 
@@ -105,6 +106,11 @@ redis.call('HSET', KEYS[1],
   'seq', ARGV[4],
   'deadlineMs', ARGV[5])
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[6]))
+-- Индекс дедлайнов восстанавливается вместе с состоянием: иначе поднятые из
+-- PostgreSQL торги стали бы невидимы для finisher'а и висели бы вечно.
+if ARGV[2] == 'RUNNING' then
+  redis.call('ZADD', KEYS[2], tonumber(ARGV[5]), ARGV[7])
+end
 return 1
 `;
 
@@ -164,6 +170,17 @@ export class AuctionStateService {
   }
 
   /**
+   * Индекс дедлайнов: отсортированное множество «лот → момент закрытия».
+   *
+   * Нужен finisher'у (T-027), чтобы находить истёкшие торги за логарифм, а не
+   * перебором ключей. SCAN по всем сессиям раз в секунду — это способ занять
+   * Redis собой в тот самый момент, когда он обрабатывает ставки.
+   */
+  deadlinesKey(): string {
+    return this.redis.key('deadlines');
+  }
+
+  /**
    * Завести состояние новых торгов. Дедлайн считает сам Redis — так он
    * привязан к тем же часам, с которыми его потом сравнивает скрипт ставки.
    */
@@ -173,8 +190,14 @@ export class AuctionStateService {
     priceTiyn: bigint;
   }): Promise<{ startedAtMs: number; deadlineMs: number }> {
     const raw = await this.startScript.run(
-      [this.stateKey(input.lotId)],
-      [input.sessionId, input.priceTiyn.toString(), SMART_HAMMER_TIMER_MS, STATE_TTL_MS],
+      [this.stateKey(input.lotId), this.deadlinesKey()],
+      [
+        input.sessionId,
+        input.priceTiyn.toString(),
+        SMART_HAMMER_TIMER_MS,
+        STATE_TTL_MS,
+        input.lotId,
+      ],
     );
 
     const pair = asStringArray(raw);
@@ -211,7 +234,7 @@ export class AuctionStateService {
     deadlineMs: number;
   }): Promise<boolean> {
     const written = await this.restoreScript.run(
-      [this.stateKey(input.lotId)],
+      [this.stateKey(input.lotId), this.deadlinesKey()],
       [
         input.sessionId,
         input.status,
@@ -219,6 +242,7 @@ export class AuctionStateService {
         input.seq,
         input.deadlineMs,
         STATE_TTL_MS,
+        input.lotId,
       ],
     );
     return written === 1;
@@ -267,9 +291,15 @@ export class AuctionStateService {
     return timers;
   }
 
+  /** Лоты, чей дедлайн уже прошёл. Кандидаты на закрытие (T-027). */
+  async dueLots(nowMs: number, limit = 100): Promise<string[]> {
+    return this.redis.client.zrangebyscore(this.deadlinesKey(), '-inf', nowMs, 'LIMIT', 0, limit);
+  }
+
   /** Снять состояние. Нужен закрытию торгов и уборке в тестах. */
   async drop(lotId: string): Promise<void> {
     await this.redis.client.del(this.stateKey(lotId));
+    await this.redis.client.zrem(this.deadlinesKey(), lotId);
   }
 }
 

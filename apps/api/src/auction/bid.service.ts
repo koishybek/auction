@@ -38,7 +38,7 @@ return string.format('%.0f', nextPriceTiyn(tonumber(price)))
  *
  * Порядок проверок — от самого дешёвого и самого частого отказа к редкому.
  *
- * KEYS[1] — ключ состояния
+ * KEYS[1] — ключ состояния, KEYS[2] — индекс дедлайнов
  * ARGV[1] — присланная участником сумма в тиынах
  * ARGV[2] — id участника, ARGV[3] — псевдоним в лоте
  * ARGV[4] — таймер в мс, ARGV[5] — TTL ключа в мс
@@ -87,6 +87,9 @@ redis.call('HSET', KEYS[1],
   'lastBidderId', ARGV[2],
   'lastBlindCode', ARGV[3])
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[5]))
+-- Дедлайн двигается и в индексе finisher'а — тем же атомарным шагом.
+-- Разъедься они, finisher закрыл бы торги, в которых только что была ставка.
+redis.call('ZADD', KEYS[2], newDeadlineMs, ARGV[7])
 
 -- Событие ровно той структуры, что задана ТЗ §2.1: ключ 'event', суммы в
 -- ТЕНГЕ, bid_step_kzt — величина шага, а не новая цена. Пересылать его
@@ -183,7 +186,7 @@ export class BidService {
     }
 
     const raw = await this.placeScript.run(
-      [this.state.stateKey(input.lotId)],
+      [this.state.stateKey(input.lotId), this.state.deadlinesKey()],
       [
         input.expectedAmountTiyn.toString(),
         input.bidderId,

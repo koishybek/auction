@@ -1,11 +1,13 @@
 import { Module } from '@nestjs/common';
 
+import { AuctionModule } from '../auction/auction.module';
 import { CryptoModule } from '../common/crypto/crypto.module';
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { LotsModule } from '../lots/lots.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
+import { FinisherWorker } from './finisher.worker';
 import { RegistryRecheckService } from './registry-recheck.service';
 import { RegistryRecheckWorker } from './registry-recheck.worker';
 
@@ -23,8 +25,8 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
  * привилегии менять статус в обход правил.
  */
 @Module({
-  imports: [PrismaModule, CryptoModule, TimeModule, RegistryModule, LotsModule],
-  providers: [RegistryRecheckService, RegistryRecheckWorker],
-  exports: [RegistryRecheckService, RegistryRecheckWorker],
+  imports: [PrismaModule, CryptoModule, TimeModule, RegistryModule, LotsModule, AuctionModule],
+  providers: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker],
+  exports: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker],
 })
 export class WorkersModule {}

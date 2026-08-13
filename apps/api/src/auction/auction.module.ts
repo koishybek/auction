@@ -8,6 +8,7 @@ import { AdminAuctionController, AuctionController } from './auction.controller'
 import { AuctionService } from './auction.service';
 import { BidPlacementService } from './bid-placement.service';
 import { BidService } from './bid.service';
+import { FinisherService } from './finisher.service';
 
 /**
  * Движок торгов.
@@ -19,7 +20,13 @@ import { BidService } from './bid.service';
 @Module({
   imports: [PrismaModule, LotsModule],
   controllers: [AuctionController, AdminAuctionController],
-  providers: [AuctionService, AuctionStateService, BidService, BidPlacementService],
-  exports: [AuctionService, AuctionStateService, BidService, BidPlacementService],
+  providers: [
+    AuctionService,
+    AuctionStateService,
+    BidService,
+    BidPlacementService,
+    FinisherService,
+  ],
+  exports: [AuctionService, AuctionStateService, BidService, BidPlacementService, FinisherService],
 })
 export class AuctionModule {}
