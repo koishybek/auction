@@ -1,4 +1,10 @@
-import { toTenge, tiyn, type AuctionStateView } from '@auction/shared';
+import {
+  SMART_HAMMER_TIMER_MS,
+  toTenge,
+  tiyn,
+  type AuctionStateView,
+  type BidUpdatedEvent,
+} from '@auction/shared';
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import { LotsService } from '../lots/lots.service';
@@ -103,6 +109,47 @@ export class AuctionService {
       });
     }
     return toStateView(lotId, state);
+  }
+
+  /**
+   * Лента ставок: последние N, свежие сверху.
+   *
+   * Формат ровно тот же, что у события `bid_updated` (ТЗ §2.1) — клиенту не
+   * приходится разбирать два разных представления одной и той же ставки: то,
+   * что прилетело в реальном времени, и то, что он забрал после
+   * переподключения.
+   *
+   * `time_remaining_ms` в истории — таймер на момент той ставки, то есть
+   * всегда полные 50 секунд: каждая принятая ставка его сбрасывала.
+   */
+  async history(lotId: string, limit: number): Promise<BidUpdatedEvent[]> {
+    const lot = await this.prisma.lot.findUnique({ where: { id: lotId } });
+    if (lot === null) {
+      throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
+    }
+
+    const bids = await this.prisma.bid.findMany({
+      where: { lotId },
+      orderBy: { seq: 'desc' },
+      take: limit,
+    });
+
+    // Шаг — разница с предыдущей ставкой. Для самой первой предыдущей нет,
+    // и точкой отсчёта служит стартовая цена лота.
+    return bids.map((bid, index) => {
+      const previousTiyn = bids[index + 1]?.amountTiyn ?? lot.startPriceTiyn;
+      return {
+        event: 'bid_updated' as const,
+        lot_id: bid.lotId,
+        session_id: bid.sessionId,
+        current_price_kzt: Number(toTenge(tiyn(bid.amountTiyn))),
+        bid_step_kzt: Number(toTenge(tiyn(bid.amountTiyn - previousTiyn))),
+        last_bidder_blind_id: bid.blindCode,
+        time_remaining_ms: SMART_HAMMER_TIMER_MS,
+        timestamp: bid.serverTs.getTime(),
+        seq: bid.seq,
+      };
+    });
   }
 
   /**

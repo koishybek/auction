@@ -1,11 +1,29 @@
-import type { AuctionStateView } from '@auction/shared';
-import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import type { AuctionStateView, BidUpdatedEvent } from '@auction/shared';
+import {
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { createZodDto } from 'nestjs-zod';
+import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser, Public, Roles } from '../auth/decorators';
 
 import { AuctionService } from './auction.service';
+
+/** Сколько последних ставок отдавать. Потолок — чтобы лента не стала выгрузкой всей сессии. */
+const BidHistorySchema = z
+  .object({ limit: z.coerce.number().int().min(1).max(100).default(20) })
+  .strict();
+
+class BidHistoryDto extends createZodDto(BidHistorySchema) {}
 
 @ApiTags('auction')
 @Controller('lots/:lotId/auction')
@@ -22,6 +40,20 @@ export class AuctionController {
   @ApiOperation({ summary: 'Состояние торгов: цена, номер ставки, остаток таймера' })
   snapshot(@Param('lotId', ParseUUIDPipe) lotId: string): Promise<AuctionStateView> {
     return this.auction.snapshot(lotId);
+  }
+
+  /**
+   * Лента ставок. Публичная: ход торгов виден всем, но только под
+   * псевдонимами — реальных участников в ней нет (FR-09).
+   */
+  @Public()
+  @Get('bids')
+  @ApiOperation({ summary: 'Последние ставки лота в формате bid_updated (ТЗ §2.1)' })
+  history(
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Query() query: BidHistoryDto,
+  ): Promise<BidUpdatedEvent[]> {
+    return this.auction.history(lotId, query.limit);
   }
 }
 

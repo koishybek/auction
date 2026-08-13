@@ -7,6 +7,7 @@ import { LotsModule } from '../lots/lots.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
+import { BidPersistWorker } from './bid-persist.worker';
 import { FinisherWorker } from './finisher.worker';
 import { RegistryRecheckService } from './registry-recheck.service';
 import { RegistryRecheckWorker } from './registry-recheck.worker';
@@ -26,7 +27,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
  */
 @Module({
   imports: [PrismaModule, CryptoModule, TimeModule, RegistryModule, LotsModule, AuctionModule],
-  providers: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker],
-  exports: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker],
+  providers: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker, BidPersistWorker],
+  exports: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker, BidPersistWorker],
 })
 export class WorkersModule {}

@@ -38,7 +38,7 @@ return string.format('%.0f', nextPriceTiyn(tonumber(price)))
  *
  * Порядок проверок — от самого дешёвого и самого частого отказа к редкому.
  *
- * KEYS[1] — ключ состояния, KEYS[2] — индекс дедлайнов
+ * KEYS[1] — состояние, KEYS[2] — индекс дедлайнов, KEYS[3] — outbox ставок
  * ARGV[1] — присланная участником сумма в тиынах
  * ARGV[2] — id участника, ARGV[3] — псевдоним в лоте
  * ARGV[4] — таймер в мс, ARGV[5] — TTL ключа в мс
@@ -90,6 +90,19 @@ redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[5]))
 -- Дедлайн двигается и в индексе finisher'а — тем же атомарным шагом.
 -- Разъедься они, finisher закрыл бы торги, в которых только что была ставка.
 redis.call('ZADD', KEYS[2], newDeadlineMs, ARGV[7])
+
+-- Outbox: принятая ставка попадает в поток тем же скриптом, что её приняла.
+-- Отдельной записью «после» она бы терялась при падении процесса между
+-- принятием и записью — и в PostgreSQL не осталось бы следа от ставки,
+-- которая уже сдвинула цену и разослана всем участникам (CLAUDE.md §4.3).
+redis.call('XADD', KEYS[3], 'MAXLEN', '~', '100000', '*',
+  'lotId', ARGV[7],
+  'sessionId', state[5],
+  'userId', ARGV[2],
+  'amountTiyn', string.format('%.0f', nextTiyn),
+  'seq', tostring(seq),
+  'blindCode', ARGV[3],
+  'serverTs', string.format('%.0f', nowMs))
 
 -- Событие ровно той структуры, что задана ТЗ §2.1: ключ 'event', суммы в
 -- ТЕНГЕ, bid_step_kzt — величина шага, а не новая цена. Пересылать его
@@ -152,6 +165,16 @@ export class BidService {
   }
 
   /**
+   * Поток принятых ставок, ожидающих записи в PostgreSQL (T-028).
+   *
+   * Один на всё приложение, а не на лот: у потребителя одна очередь и один
+   * порядок, а лот всё равно есть в каждой записи.
+   */
+  outboxKey(): string {
+    return this.redis.key('bids', 'outbox');
+  }
+
+  /**
    * Сумма следующей ставки.
    *
    * Считает Redis тем же кодом, что и приём ставки: если бы её считал клиент
@@ -186,7 +209,7 @@ export class BidService {
     }
 
     const raw = await this.placeScript.run(
-      [this.state.stateKey(input.lotId), this.state.deadlinesKey()],
+      [this.state.stateKey(input.lotId), this.state.deadlinesKey(), this.outboxKey()],
       [
         input.expectedAmountTiyn.toString(),
         input.bidderId,

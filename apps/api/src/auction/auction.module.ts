@@ -7,6 +7,7 @@ import { AuctionStateService } from './auction-state.service';
 import { AdminAuctionController, AuctionController } from './auction.controller';
 import { AuctionService } from './auction.service';
 import { BidPlacementService } from './bid-placement.service';
+import { BidOutboxService } from './bid-outbox.service';
 import { BidService } from './bid.service';
 import { FinisherService } from './finisher.service';
 
@@ -26,7 +27,15 @@ import { FinisherService } from './finisher.service';
     BidService,
     BidPlacementService,
     FinisherService,
+    BidOutboxService,
   ],
-  exports: [AuctionService, AuctionStateService, BidService, BidPlacementService, FinisherService],
+  exports: [
+    AuctionService,
+    AuctionStateService,
+    BidService,
+    BidPlacementService,
+    FinisherService,
+    BidOutboxService,
+  ],
 })
 export class AuctionModule {}
