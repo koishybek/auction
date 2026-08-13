@@ -1,4 +1,9 @@
-import type { EgovLoginResult, LotView, TokenPair } from '@auction/shared';
+import {
+  SMART_HAMMER_TIMER_MS,
+  type EgovLoginResult,
+  type LotView,
+  type TokenPair,
+} from '@auction/shared';
 import type { INestApplication } from '@nestjs/common';
 import type { TestingModule } from '@nestjs/testing';
 import { Test } from '@nestjs/testing';
@@ -8,6 +13,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
+import { BidOutboxService } from '../src/auction/bid-outbox.service';
 import { BidService } from '../src/auction/bid.service';
 import { GatewayModule } from '../src/gateway/gateway.module';
 import { WsGatewayService } from '../src/gateway/ws-gateway.service';
@@ -33,6 +39,7 @@ let second: TestingModule;
 let prisma: PrismaService;
 let redis: RedisService;
 let bids: BidService;
+let outbox: BidOutboxService;
 let portA = 0;
 let portB = 0;
 
@@ -119,6 +126,17 @@ async function lotInAuction(): Promise<{ lot: LotView; admin: TokenPair }> {
   return { lot, admin };
 }
 
+/**
+ * Настоящий участник в базе.
+ *
+ * Ядру ставки id безразличен — оно принимает его строкой и не ходит в базу.
+ * Но там, где тест доводит ставку до PostgreSQL, нужен реальный пользователь:
+ * колонка user_id имеет тип uuid и внешний ключ.
+ */
+async function investorId(): Promise<string> {
+  return userId(await egovLogin(randomIin()));
+}
+
 /** Клиент WS с накоплением полученных событий. */
 interface Client {
   readonly socket: WebSocket;
@@ -178,6 +196,7 @@ beforeAll(async () => {
   prisma = app.get(PrismaService);
   redis = app.get(RedisService);
   bids = app.get(BidService);
+  outbox = app.get(BidOutboxService);
 
   // Инстанс Б: только realtime-контур, свой контейнер и своя подписка на Redis.
   // Это и есть «второй под за балансировщиком».
@@ -477,6 +496,100 @@ describe('T-023: WS-gateway, комнаты и мост pub/sub', () => {
       // Пустая комната закрывается — вещать некому и незачем.
       await new Promise((resolve) => setTimeout(resolve, 2_200));
       expect(client.messages.filter((m) => m['event'] === 'timer_tick')).toHaveLength(0);
+    } finally {
+      client.close();
+    }
+  });
+
+  it('DoD T-030: после десятисекундного обрыва остаток верен в пределах тика', async () => {
+    const { lot } = await lotInAuction();
+    const investor = await investorId();
+    const first = await connect(portA);
+
+    let beforeDrop: number;
+    try {
+      first.send({ event: 'join_lot', lot_id: lot.id });
+      const snapshot = await first.waitFor('state_snapshot');
+      beforeDrop = snapshot['time_remaining_ms'] as number;
+
+      await bids.place({
+        lotId: lot.id,
+        bidderId: investor,
+        blindCode: 'Инвестор #704',
+        expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+      });
+      await first.waitFor('bid_updated');
+      // Лента читается из PostgreSQL: в проде туда переносит воркер, здесь — вручную.
+      await outbox.drain();
+    } finally {
+      // Обрыв: сокет рвётся без прощания, как при пропаже сети.
+      first.socket.terminate();
+    }
+
+    // Десять секунд без связи. Клиент в это время не считает ничего — у него
+    // нет и не может быть собственного отсчёта.
+    const droppedAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    const offlineMs = Date.now() - droppedAt;
+
+    const second = await connect(portA);
+    try {
+      second.send({ event: 'join_lot', lot_id: lot.id });
+      const resynced = await second.waitFor('state_snapshot');
+      const remaining = resynced['time_remaining_ms'] as number;
+
+      /**
+       * Главное утверждение приёмки: остаток учитывает всё время, что связи не
+       * было. Клиент, продолживший считать свой таймер, показал бы почти
+       * полные пятьдесят секунд и позволил бы человеку думать, что у него есть
+       * время, которого нет.
+       *
+       * Допуск — один тик плюс запас на дорогу: ставка перед обрывом сбросила
+       * таймер, значит от неё прошло примерно offlineMs.
+       */
+      const expected = SMART_HAMMER_TIMER_MS - offlineMs;
+      expect(Math.abs(remaining - expected)).toBeLessThanOrEqual(1_500);
+      expect(remaining).toBeLessThan(beforeDrop);
+
+      // Пропущенное видно сразу, без отдельного запроса за историей.
+      const tail = resynced['recent_bids'] as Record<string, unknown>[];
+      expect(tail).toHaveLength(1);
+      expect(tail[0]?.['seq']).toBe(1);
+      expect(tail[0]?.['last_bidder_blind_id']).toBe('Инвестор #704');
+      expect(resynced['seq']).toBe(1);
+      expect(resynced['current_price_kzt']).toBe(1_030_000);
+
+      // Тики продолжают идти в новое соединение.
+      const tick = await second.waitFor('timer_tick', 3_000);
+      expect(tick['time_remaining_ms']).toBeLessThanOrEqual(remaining);
+    } finally {
+      second.close();
+    }
+  }, 60_000);
+
+  it('снимок при входе несёт хвост ленты, а не пустоту', async () => {
+    const { lot } = await lotInAuction();
+    const [one, two] = [await investorId(), await investorId()];
+    for (const bidder of [one, two, one]) {
+      await bids.place({
+        lotId: lot.id,
+        bidderId: bidder,
+        blindCode: `Инвестор #${bidder === one ? '100' : '200'}`,
+        expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+      });
+    }
+    await outbox.drain();
+
+    const client = await connect(portA);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id });
+      const snapshot = await client.waitFor('state_snapshot');
+      const tail = snapshot['recent_bids'] as Record<string, unknown>[];
+
+      // Свежие сверху — лента читается сверху вниз.
+      expect(tail.map((bid) => bid['seq'])).toEqual([3, 2, 1]);
+      // Реальных участников в хвосте нет (FR-09).
+      expect(JSON.stringify(tail)).not.toContain(one);
     } finally {
       client.close();
     }

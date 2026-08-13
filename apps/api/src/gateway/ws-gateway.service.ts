@@ -1,6 +1,11 @@
 import { createServer, type Server } from 'node:http';
 
-import type { StateSnapshotEvent, TimerTickEvent, WsErrorCode } from '@auction/shared';
+import type {
+  BidUpdatedEvent,
+  StateSnapshotEvent,
+  TimerTickEvent,
+  WsErrorCode,
+} from '@auction/shared';
 import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { WebSocketServer, type WebSocket } from 'ws';
@@ -38,6 +43,14 @@ const TIMER_TICK_MS = 1_000;
  * сокета.
  */
 const MAX_ROOMS_PER_SOCKET = 20;
+
+/**
+ * Сколько последних ставок кладётся в снимок состояния.
+ *
+ * Хвост, а не история: вернувшемуся после обрыва нужно понять, что произошло,
+ * а не выгрузить сессию целиком. За полной лентой есть отдельная ручка.
+ */
+const SNAPSHOT_BIDS = 10;
 
 /** Состояние соединения, которое держит сам gateway. */
 interface Connection extends RoomMember {
@@ -214,7 +227,11 @@ export class WsGatewayService implements OnModuleDestroy {
 
     let snapshot: StateSnapshotEvent;
     try {
-      snapshot = toSnapshotEvent(await this.auction.snapshot(lotId));
+      const [state, recentBids] = await Promise.all([
+        this.auction.snapshot(lotId),
+        this.auction.history(lotId, SNAPSHOT_BIDS),
+      ]);
+      snapshot = toSnapshotEvent(state, recentBids);
     } catch {
       this.fail(connection, 'SESSION_NOT_FOUND', 'По этому лоту торги не идут');
       return;
@@ -320,17 +337,21 @@ export class WsGatewayService implements OnModuleDestroy {
 }
 
 /** Состояние из REST-формы в форму провода WebSocket (ТЗ §2.1: snake_case, тенге). */
-function toSnapshotEvent(state: {
-  lotId: string;
-  sessionId: string;
-  status: 'RUNNING' | 'FROZEN' | 'FINISHED';
-  currentPriceTenge: number;
-  nextBidTenge: number;
-  timeRemainingMs: number;
-  serverTs: number;
-  seq: number;
-}): StateSnapshotEvent {
+function toSnapshotEvent(
+  state: {
+    lotId: string;
+    sessionId: string;
+    status: 'RUNNING' | 'FROZEN' | 'FINISHED';
+    currentPriceTenge: number;
+    nextBidTenge: number;
+    timeRemainingMs: number;
+    serverTs: number;
+    seq: number;
+  },
+  recentBids: readonly BidUpdatedEvent[],
+): StateSnapshotEvent {
   return {
+    recent_bids: recentBids,
     event: 'state_snapshot',
     lot_id: state.lotId,
     session_id: state.sessionId,
