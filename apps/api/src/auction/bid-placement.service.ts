@@ -4,6 +4,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { BidService, type BidOutcome } from './bid.service';
+import { BlindIdService } from './blind-id.service';
 
 /** Результат полного пути ставки: пред-проверки плюс атомарное ядро. */
 export type PlacementResult =
@@ -29,18 +30,19 @@ export class BidPlacementService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly bids: BidService,
+    private readonly blindIds: BlindIdService,
   ) {}
 
   /**
    * Поставить от имени участника.
    *
-   * `blindCode` приходит извне: псевдоним участника в лоте выдаёт отдельный
-   * механизм (T-029), и ядру он нужен только затем, чтобы попасть в ленту.
+   * Псевдоним не принимается снаружи, а выдаётся здесь (T-029): позволь его
+   * прислать — и участник назовётся чужим номером, а лента ставок перестанет
+   * быть доказательством чего бы то ни было.
    */
   async place(input: {
     lotId: string;
     userId: string;
-    blindCode: string;
     expectedAmountTiyn: bigint;
   }): Promise<PlacementResult> {
     const denied = await this.checkEligibility(input.userId, input.lotId);
@@ -52,10 +54,11 @@ export class BidPlacementService {
       return { status: 'REJECTED', code: denied };
     }
 
+    const code = await this.blindIds.codeFor(input.lotId, input.userId);
     const outcome: BidOutcome = await this.bids.place({
       lotId: input.lotId,
       bidderId: input.userId,
-      blindCode: input.blindCode,
+      blindCode: BlindIdService.label(code),
       expectedAmountTiyn: input.expectedAmountTiyn,
     });
 

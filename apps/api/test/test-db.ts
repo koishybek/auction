@@ -84,6 +84,7 @@ export async function cleanDatabase(prisma: PrismaService): Promise<void> {
    * чужих людей в списке пользователей.
    */
   await prisma.bid.deleteMany();
+  await prisma.blindId.deleteMany();
   await prisma.auctionSession.deleteMany();
   await prisma.lot.deleteMany();
   await prisma.partnerLead.deleteMany();

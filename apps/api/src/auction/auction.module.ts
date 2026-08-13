@@ -9,6 +9,7 @@ import { AuctionService } from './auction.service';
 import { BidPlacementService } from './bid-placement.service';
 import { BidOutboxService } from './bid-outbox.service';
 import { BidService } from './bid.service';
+import { BlindIdService } from './blind-id.service';
 import { FinisherService } from './finisher.service';
 
 /**
@@ -28,6 +29,7 @@ import { FinisherService } from './finisher.service';
     BidPlacementService,
     FinisherService,
     BidOutboxService,
+    BlindIdService,
   ],
   exports: [
     AuctionService,

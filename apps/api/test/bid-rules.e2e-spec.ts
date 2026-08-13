@@ -131,15 +131,10 @@ async function payDeposit(userId: string, lot: LotView): Promise<void> {
   });
 }
 
-async function bid(
-  lotId: string,
-  userId: string,
-  blindCode = 'Инвестор #704',
-): Promise<PlacementResult> {
+async function bid(lotId: string, userId: string): Promise<PlacementResult> {
   return placement.place({
     lotId,
     userId,
-    blindCode,
     expectedAmountTiyn: await bids.nextPriceTiyn(lotId),
   });
 }
@@ -242,7 +237,6 @@ describe('T-025: право поставить', () => {
         placement.place({
           lotId: lot.id,
           userId: buyer,
-          blindCode: 'Инвестор #704',
           expectedAmountTiyn: next,
         }),
       ),
@@ -274,7 +268,6 @@ describe('T-025: право поставить', () => {
     const result = await placement.place({
       lotId: lot.id,
       userId: buyer,
-      blindCode: 'Инвестор #704',
       expectedAmountTiyn: next,
     });
     expect(codeOf(result)).toBe('TIMER_EXPIRED');
@@ -338,7 +331,6 @@ describe('T-025: право поставить', () => {
     const result = await placement.place({
       lotId: lot.id,
       userId: buyer,
-      blindCode: 'Инвестор #704',
       expectedAmountTiyn: next,
     });
     expect(codeOf(result)).toBe('NO_SESSION');
