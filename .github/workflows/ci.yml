@@ -93,12 +93,6 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/auction
       DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/auction
       REDIS_URL: redis://127.0.0.1:6379
-      # Ключи и секреты одноразовые, сгенерированы для прогона: настоящие
-      # живут в секретах окружения и в CI не нужны.
-      PII_ENCRYPTION_KEY: Y2ktb25seS1waWktZW5jcnlwdGlvbi1rZXktMzJieQ==
-      PII_BLIND_INDEX_KEY: Y2ktb25seS1waWktYmxpbmQtaW5kZXgta2V5LTMyYnk=
-      JWT_ACCESS_SECRET: ci-only-access-secret-not-used-in-production
-      JWT_REFRESH_SECRET: ci-only-refresh-secret-not-used-in-production
       NODE_ENV: test
 
     steps:
@@ -110,6 +104,23 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: pnpm
+
+      # Ключи для прогона генерируются здесь, а не лежат литералами в файле.
+      #
+      # Так они, во-первых, гарантированно нужной длины: первая попытка
+      # записать «читаемый» base64 руками дала 31 байт вместо 32, и все двенадцать
+      # e2e-сюит легли на валидации окружения. Во-вторых, в репозитории не
+      # остаётся строк, похожих на ключи, — их не приходится каждый раз глазами
+      # отличать от настоящих. Настоящие живут в секретах окружения.
+      - name: Одноразовые ключи прогона
+        run: |
+          gen32() { node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"; }
+          {
+            echo "PII_ENCRYPTION_KEY=$(gen32)"
+            echo "PII_BLIND_INDEX_KEY=$(gen32)"
+            echo "JWT_ACCESS_SECRET=$(gen32)"
+            echo "JWT_REFRESH_SECRET=$(gen32)"
+          } >> "$GITHUB_ENV"
 
       - name: Установка зависимостей
         run: pnpm install --frozen-lockfile
