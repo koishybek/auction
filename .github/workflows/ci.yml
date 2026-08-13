@@ -153,6 +153,9 @@ jobs:
       packages: write
 
     strategy:
+      # Без fail-fast: падение одного образа отменяло второй, и его результат
+      # оставался неизвестным. На отладке сборки это лишний круг ожидания.
+      fail-fast: false
       matrix:
         app: [api, web]
 

@@ -29,8 +29,15 @@ COPY apps/api apps/api
 RUN pnpm --filter @auction/shared build && pnpm --filter @auction/api build
 
 # Отдельный набор зависимостей без dev: тащить в рантайм eslint и vitest незачем.
+#
+# --legacy обязателен: начиная с pnpm 10 обычный deploy требует, чтобы в
+# воркспейсе был включён inject-workspace-packages. Включать его глобально ради
+# сборки образа не хочется — в разработке это меняет связь с @auction/shared с
+# симлинка на копию, и правка общего пакета перестаёт подхватываться без
+# переустановки. Флаг оставляет разработку как есть, а образу даёт то же
+# дерево зависимостей, что и раньше.
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm --filter @auction/api --prod deploy /runtime
+    pnpm --filter @auction/api --prod --legacy deploy /runtime
 
 # ─── Рантайм ─────────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime
