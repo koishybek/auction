@@ -9,6 +9,7 @@ import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 import { cleanDatabase } from './test-db';
+import { listenForSupertest } from './test-http';
 
 let app: INestApplication;
 let prisma: PrismaService;
@@ -44,6 +45,7 @@ beforeAll(async () => {
   app = moduleRef.createNestApplication({ logger: false });
   configureApp(app, { shutdownHooks: false });
   await app.init();
+  await listenForSupertest(app);
   prisma = app.get(PrismaService);
 });
 

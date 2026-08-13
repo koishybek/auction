@@ -11,6 +11,7 @@ import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
 
 import { cleanDatabase, cleanRedis } from './test-db';
+import { listenForSupertest } from './test-http';
 
 /**
  * Ядро ставки (T-024).
@@ -52,6 +53,7 @@ beforeAll(async () => {
   app = moduleRef.createNestApplication({ logger: false });
   configureApp(app, { shutdownHooks: false });
   await app.init();
+  await listenForSupertest(app);
   prisma = app.get(PrismaService);
   redis = app.get(RedisService);
   state = app.get(AuctionStateService);

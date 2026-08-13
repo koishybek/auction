@@ -9,6 +9,7 @@ import { configureApp } from '../src/app.setup';
 import { PrismaService } from '../src/prisma/prisma.service';
 
 import { cleanDatabase, databaseNameOf } from './test-db';
+import { listenForSupertest } from './test-http';
 
 // getHttpServer() типизирован как any — заворачиваем один раз, а не в каждом тесте.
 function api(): ReturnType<typeof request> {
@@ -32,6 +33,7 @@ beforeAll(async () => {
   // и не дают процессу vitest завершиться.
   configureApp(app, { shutdownHooks: false });
   await app.init();
+  await listenForSupertest(app);
   prisma = app.get(PrismaService);
 });
 

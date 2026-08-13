@@ -16,6 +16,7 @@ import { RealtimeModule } from '../src/realtime.module';
 import { RedisService } from '../src/redis/redis.service';
 
 import { cleanDatabase, cleanRedis } from './test-db';
+import { listenForSupertest } from './test-http';
 
 /**
  * WS-gateway (T-023).
@@ -172,6 +173,7 @@ beforeAll(async () => {
   app = first.createNestApplication({ logger: false });
   configureApp(app, { shutdownHooks: false });
   await app.init();
+  await listenForSupertest(app);
 
   prisma = app.get(PrismaService);
   redis = app.get(RedisService);
