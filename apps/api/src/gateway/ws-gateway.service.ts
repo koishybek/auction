@@ -12,6 +12,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 
 import { AuctionStateService } from '../auction/auction-state.service';
 import { AuctionService } from '../auction/auction.service';
+import { DEGRADED_RTT_MS, SlaFreezeService } from '../auction/sla-freeze.service';
 import { TokenService } from '../auth/token.service';
 import type { Env } from '../config/env.schema';
 import { TimeService } from '../time/time.service';
@@ -25,8 +26,21 @@ import { LotRoomsService, type RoomMember } from './lot-rooms.service';
  */
 const MAX_FRAME_BYTES = 4 * 1024;
 
-/** Как часто проверяется живость соединения. */
-const HEARTBEAT_MS = 15_000;
+/**
+ * Период ping. 2000 мс задано ТЗ §2.2 — на этом же такте считается деградация
+ * связи для SLA Freeze, поэтому значение не произвольное.
+ */
+const HEARTBEAT_MS = 2_000;
+
+/**
+ * Сколько тактов без ответа терпим, прежде чем закрыть соединение.
+ *
+ * Раньше ping шёл раз в 15 секунд и одного пропуска хватало. Теперь такт 2
+ * секунды, и рвать связь после одного пропущенного ответа значило бы
+ * выбрасывать людей при первой же икоте сети — той самой, ради которой
+ * существует SLA Freeze.
+ */
+const MISSED_PONGS_BEFORE_DROP = 5;
 
 /**
  * Период тика таймера. 1000 мс задано ТЗ §2.1 и FR-02 — не настройка.
@@ -56,8 +70,12 @@ const SNAPSHOT_BIDS = 10;
 interface Connection extends RoomMember {
   readonly socket: WebSocket;
   userId: string | null;
-  /** Ответил ли на последний ping. Не ответил дважды — соединение мертво. */
-  alive: boolean;
+  /** Сколько тактов подряд не ответил на ping. */
+  missedPongs: number;
+  /** Когда отправлен последний ping — от него считается задержка. */
+  pingSentAt: number | null;
+  /** Задержка последнего ответа, мс. null — ответа ещё не было. */
+  rttMs: number | null;
   rooms: Set<string>;
 }
 
@@ -84,6 +102,7 @@ export class WsGatewayService implements OnModuleDestroy {
     private readonly rooms: LotRoomsService,
     private readonly auction: AuctionService,
     private readonly state: AuctionStateService,
+    private readonly slaFreeze: SlaFreezeService,
     private readonly tokens: TokenService,
     private readonly time: TimeService,
     config: ConfigService<Env, true>,
@@ -161,7 +180,9 @@ export class WsGatewayService implements OnModuleDestroy {
       id: `ws-${String(this.nextId)}`,
       socket,
       userId: null,
-      alive: true,
+      missedPongs: 0,
+      pingSentAt: null,
+      rttMs: null,
       rooms: new Set<string>(),
       send: (payload: string) => {
         if (socket.readyState === socket.OPEN) {
@@ -192,7 +213,12 @@ export class WsGatewayService implements OnModuleDestroy {
 
     const message = parsed.message;
     if (message.event === 'pong') {
-      connection.alive = true;
+      // Задержка ответа — единственная метрика качества связи, которая у нас
+      // есть: клиент ничего не измеряет и ничего не присылает, кроме факта.
+      if (connection.pingSentAt !== null) {
+        connection.rttMs = this.time.wallClockMs() - connection.pingSentAt;
+      }
+      connection.missedPongs = 0;
       return;
     }
     if (message.event === 'leave_lot') {
@@ -281,18 +307,73 @@ export class WsGatewayService implements OnModuleDestroy {
     }
   }
 
-  /** Разослать ping и закрыть тех, кто не ответил на предыдущий. */
+  /**
+   * Такт heartbeat: разослать ping, прибрать мёртвых, оценить деградацию.
+   *
+   * Отсюда же растёт SLA Freeze: задержка ответа на ping — это и есть та
+   * величина, по которой ТЗ §2.2 предлагает судить о качестве связи зала.
+   */
   private sweep(): void {
-    const ping = JSON.stringify({ event: 'ping', server_ts: this.time.wallClockMs() });
+    const now = this.time.wallClockMs();
+    const ping = JSON.stringify({ event: 'ping', server_ts: now });
+
     for (const connection of this.connections) {
-      if (!connection.alive) {
+      if (connection.missedPongs >= MISSED_PONGS_BEFORE_DROP) {
         // Молчащее соединение занимает память и получает события, которых
         // никто не видит. Закрываем — клиент переподключится и заберёт снимок.
         connection.socket.terminate();
         continue;
       }
-      connection.alive = false;
+      connection.missedPongs += 1;
+      connection.pingSentAt = now;
       connection.send(ping);
+    }
+
+    void this.checkDegradation(now).catch((error: unknown) => {
+      this.logger.warn(
+        `Оценка деградации не удалась: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+  }
+
+  /**
+   * Заморозить лоты, у которых слишком много участников с плохой связью.
+   *
+   * ОГРАНИЧЕНИЕ, о котором нужно помнить: доля считается по клиентам ЭТОГО
+   * инстанса. При нескольких gateway каждый видит только своих, и «40 %
+   * подключённых» из ТЗ понимается локально. Для настоящей глобальной оценки
+   * нужен общий счётчик в Redis — это следующий шаг. Ложное срабатывание при
+   * этом безвредно (пауза на минуту, остаток сохранён), пропуск — нет,
+   * поэтому локальная оценка лучше, чем никакой.
+   */
+  private async checkDegradation(now: number): Promise<void> {
+    const perLot = new Map<string, { total: number; degraded: number }>();
+
+    for (const connection of this.connections) {
+      const stale = connection.pingSentAt !== null && now - connection.pingSentAt > DEGRADED_RTT_MS;
+      const slow = connection.rttMs !== null && connection.rttMs > DEGRADED_RTT_MS;
+      const bad = stale || slow || connection.missedPongs > 1;
+
+      for (const lotId of connection.rooms) {
+        const stats = perLot.get(lotId) ?? { total: 0, degraded: 0 };
+        stats.total += 1;
+        if (bad) {
+          stats.degraded += 1;
+        }
+        perLot.set(lotId, stats);
+      }
+    }
+
+    for (const [lotId, stats] of perLot) {
+      if (!SlaFreezeService.shouldFreeze(stats.degraded, stats.total)) {
+        continue;
+      }
+      // Заморозка идемпотентна: замораживает только идущие торги, поэтому
+      // несколько инстансов, увидевших деградацию одновременно, безопасны.
+      await this.slaFreeze.freeze(
+        lotId,
+        `${String(stats.degraded)} из ${String(stats.total)} соединений с задержкой`,
+      );
     }
   }
 

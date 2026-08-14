@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 
 import { FinisherService } from '../auction/finisher.service';
+import { SlaFreezeService } from '../auction/sla-freeze.service';
 import { TimeService } from '../time/time.service';
 
 /**
@@ -30,6 +31,7 @@ export class FinisherWorker implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly finisher: FinisherService,
+    private readonly freeze: SlaFreezeService,
     private readonly time: TimeService,
   ) {}
 
@@ -59,6 +61,17 @@ export class FinisherWorker implements OnModuleInit, OnModuleDestroy {
     }
     this.running = true;
     try {
+      /**
+       * Возобновление идёт ПЕРЕД закрытием, и порядок здесь существенный.
+       *
+       * Замороженный лот не лежит в индексе дедлайнов, поэтому finisher его не
+       * видит. Но лот, у которого пауза только что истекла, обязан сначала
+       * вернуться в торги со своим остатком — и лишь потом, если остаток уже
+       * нулевой, быть закрытым. Обратный порядок откладывал бы закрытие на
+       * лишний проход.
+       */
+      await this.freeze.resumeDue(this.time.wallClockMs());
+
       const finished = await this.finisher.finishDue(this.time.wallClockMs());
       return finished.length;
     } catch (error) {

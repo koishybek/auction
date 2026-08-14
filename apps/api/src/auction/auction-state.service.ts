@@ -94,6 +94,89 @@ end
 return out
 `;
 
+/**
+ * Заморозить торги по SLA (T-032, FR-08).
+ *
+ * Снимок остатка снимается тем же скриптом, что меняет статус: возьми их
+ * порознь — и между ними пройдёт время, которое участник потеряет безвозвратно.
+ *
+ * Лот убирается из индекса дедлайнов и попадает в индекс заморозок. Это не
+ * бухгалтерия, а условие корректности: останься он в дедлайнах, finisher
+ * закрыл бы замороженные торги как истёкшие ровно в тот момент, когда у
+ * участников нет связи, чтобы возразить.
+ *
+ * KEYS[1] — состояние, KEYS[2] — индекс дедлайнов, KEYS[3] — индекс заморозок
+ * ARGV[1] — длительность паузы в мс, ARGV[2] — канал, ARGV[3] — id лота
+ */
+const FREEZE_SESSION = `
+local state = redis.call('HMGET', KEYS[1], 'status', 'deadlineMs', 'sessionId')
+if not state[1] then
+  return { 'NO_SESSION' }
+end
+if state[1] ~= 'RUNNING' then
+  return { 'NOT_RUNNING' }
+end
+${NOW_MS_LUA}
+local remainingMs = tonumber(state[2]) - nowMs
+if remainingMs < 0 then
+  remainingMs = 0
+end
+local resumeAtMs = nowMs + tonumber(ARGV[1])
+
+redis.call('HSET', KEYS[1],
+  'status', 'FROZEN',
+  'freezeRemainingMs', string.format('%.0f', remainingMs),
+  'resumeAtMs', string.format('%.0f', resumeAtMs))
+redis.call('ZREM', KEYS[2], ARGV[3])
+redis.call('ZADD', KEYS[3], resumeAtMs, ARGV[3])
+
+redis.call('PUBLISH', ARGV[2], cjson.encode({
+  event = 'sla_freeze',
+  lot_id = ARGV[3],
+  session_id = state[3],
+  time_remaining_ms = remainingMs,
+  resume_in_ms = tonumber(ARGV[1]),
+  timestamp = nowMs
+}))
+
+return { 'FROZEN', string.format('%.0f', remainingMs), string.format('%.0f', resumeAtMs) }
+`;
+
+/**
+ * Возобновить торги после паузы.
+ *
+ * Дедлайн собирается заново из снимка: участник получает ровно тот остаток,
+ * что был у него в момент заморозки, а не «сколько осталось по календарю».
+ *
+ * KEYS[1] — состояние, KEYS[2] — индекс дедлайнов, KEYS[3] — индекс заморозок
+ * ARGV[1] — канал, ARGV[2] — id лота
+ */
+const RESUME_SESSION = `
+local state = redis.call('HMGET', KEYS[1], 'status', 'freezeRemainingMs', 'sessionId')
+if state[1] ~= 'FROZEN' then
+  redis.call('ZREM', KEYS[3], ARGV[2])
+  return { 'NOT_FROZEN' }
+end
+${NOW_MS_LUA}
+local remainingMs = tonumber(state[2])
+local deadlineMs = nowMs + remainingMs
+
+redis.call('HSET', KEYS[1], 'status', 'RUNNING', 'deadlineMs', string.format('%.0f', deadlineMs))
+redis.call('HDEL', KEYS[1], 'freezeRemainingMs', 'resumeAtMs')
+redis.call('ZREM', KEYS[3], ARGV[2])
+redis.call('ZADD', KEYS[2], deadlineMs, ARGV[2])
+
+redis.call('PUBLISH', ARGV[1], cjson.encode({
+  event = 'sla_resume',
+  lot_id = ARGV[2],
+  session_id = state[3],
+  time_remaining_ms = remainingMs,
+  timestamp = nowMs
+}))
+
+return { 'RESUMED', string.format('%.0f', remainingMs), string.format('%.0f', deadlineMs) }
+`;
+
 /** Восстановить состояние из PostgreSQL, если ключ потерян. Не трогает существующий. */
 const RESTORE_STATE = `
 if redis.call('EXISTS', KEYS[1]) == 1 then
@@ -156,12 +239,16 @@ export class AuctionStateService {
   private readonly readScript: RedisScript;
   private readonly timersScript: RedisScript;
   private readonly restoreScript: RedisScript;
+  private readonly freezeScript: RedisScript;
+  private readonly resumeScript: RedisScript;
 
   constructor(private readonly redis: RedisService) {
     this.startScript = redis.script(START_SESSION);
     this.readScript = redis.script(READ_STATE);
     this.timersScript = redis.script(READ_TIMERS);
     this.restoreScript = redis.script(RESTORE_STATE);
+    this.freezeScript = redis.script(FREEZE_SESSION);
+    this.resumeScript = redis.script(RESUME_SESSION);
   }
 
   /** Ключ состояния лота. Публичный: на него подписывается gateway (T-023). */
@@ -291,6 +378,54 @@ export class AuctionStateService {
     return timers;
   }
 
+  /** Индекс замороженных торгов: лот → момент автоматического возобновления. */
+  frozenKey(): string {
+    return this.redis.key('frozen');
+  }
+
+  /**
+   * Заморозить торги: статус FROZEN и снимок остатка одним шагом (T-032).
+   * Возвращает null, если замораживать нечего — торги уже не идут.
+   */
+  async freeze(
+    lotId: string,
+    pauseMs: number,
+    channel: string,
+  ): Promise<{ remainingMs: number; resumeAtMs: number } | null> {
+    const parts = asStringArray(
+      await this.freezeScript.run(
+        [this.stateKey(lotId), this.deadlinesKey(), this.frozenKey()],
+        [pauseMs, channel, lotId],
+      ),
+    );
+    if (parts[0] !== 'FROZEN') {
+      return null;
+    }
+    return { remainingMs: Number(parts[1] ?? '0'), resumeAtMs: Number(parts[2] ?? '0') };
+  }
+
+  /** Возобновить торги, вернув остаток из снимка. null — лот не был заморожен. */
+  async resume(
+    lotId: string,
+    channel: string,
+  ): Promise<{ remainingMs: number; deadlineMs: number } | null> {
+    const parts = asStringArray(
+      await this.resumeScript.run(
+        [this.stateKey(lotId), this.deadlinesKey(), this.frozenKey()],
+        [channel, lotId],
+      ),
+    );
+    if (parts[0] !== 'RESUMED') {
+      return null;
+    }
+    return { remainingMs: Number(parts[1] ?? '0'), deadlineMs: Number(parts[2] ?? '0') };
+  }
+
+  /** Замороженные лоты, которым пора возобновиться. */
+  async dueForResume(nowMs: number, limit = 100): Promise<string[]> {
+    return this.redis.client.zrangebyscore(this.frozenKey(), '-inf', nowMs, 'LIMIT', 0, limit);
+  }
+
   /** Лоты, чей дедлайн уже прошёл. Кандидаты на закрытие (T-027). */
   async dueLots(nowMs: number, limit = 100): Promise<string[]> {
     return this.redis.client.zrangebyscore(this.deadlinesKey(), '-inf', nowMs, 'LIMIT', 0, limit);
@@ -300,6 +435,7 @@ export class AuctionStateService {
   async drop(lotId: string): Promise<void> {
     await this.redis.client.del(this.stateKey(lotId));
     await this.redis.client.zrem(this.deadlinesKey(), lotId);
+    await this.redis.client.zrem(this.frozenKey(), lotId);
   }
 }
 

@@ -31,6 +31,8 @@ export const BID_DENY_CODES = [
   'NO_DEPOSIT',
   /** Продавец не участвует в торгах по собственному лоту. */
   'SELLER_OWN_LOT',
+  /** Чаще одной ставки в 500 мс (FR-10). Мягкий отказ: можно повторить. */
+  'RATE_LIMITED',
 ] as const;
 export type BidDenyCode = (typeof BID_DENY_CODES)[number];
 

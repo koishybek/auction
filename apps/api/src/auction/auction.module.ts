@@ -9,8 +9,10 @@ import { AuctionService } from './auction.service';
 import { BidPlacementService } from './bid-placement.service';
 import { BidOutboxService } from './bid-outbox.service';
 import { BidService } from './bid.service';
+import { BidRateLimitService } from './bid-rate-limit.service';
 import { BlindIdService } from './blind-id.service';
 import { FinisherService } from './finisher.service';
+import { SlaFreezeService } from './sla-freeze.service';
 
 /**
  * Движок торгов.
@@ -30,8 +32,11 @@ import { FinisherService } from './finisher.service';
     FinisherService,
     BidOutboxService,
     BlindIdService,
+    BidRateLimitService,
+    SlaFreezeService,
   ],
   exports: [
+    SlaFreezeService,
     AuctionService,
     AuctionStateService,
     BidService,
