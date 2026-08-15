@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { AuctionModule } from '../auction/auction.module';
 import { CryptoModule } from '../common/crypto/crypto.module';
+import { DepositsModule } from '../deposits/deposits.module';
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { LotsModule } from '../lots/lots.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -10,6 +11,7 @@ import { TimeModule } from '../time/time.module';
 
 import { BidPersistWorker } from './bid-persist.worker';
 import { FinisherWorker } from './finisher.worker';
+import { RefundWorker } from './refund.worker';
 import { RegistryRecheckService } from './registry-recheck.service';
 import { RegistryRecheckWorker } from './registry-recheck.worker';
 
@@ -35,8 +37,21 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     LotsModule,
     AuctionModule,
     NotificationsModule,
+    DepositsModule,
   ],
-  providers: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker, BidPersistWorker],
-  exports: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker, BidPersistWorker],
+  providers: [
+    RegistryRecheckService,
+    RegistryRecheckWorker,
+    FinisherWorker,
+    BidPersistWorker,
+    RefundWorker,
+  ],
+  exports: [
+    RegistryRecheckService,
+    RegistryRecheckWorker,
+    FinisherWorker,
+    BidPersistWorker,
+    RefundWorker,
+  ],
 })
 export class WorkersModule {}

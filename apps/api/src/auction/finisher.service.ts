@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { DepositsService } from '../deposits/deposits.service';
 import { LotsService } from '../lots/lots.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -104,6 +105,7 @@ export class FinisherService {
     private readonly bids: BidService,
     private readonly prisma: PrismaService,
     private readonly lots: LotsService,
+    private readonly deposits: DepositsService,
   ) {
     this.finishScript = redis.script(FINISH_SESSION);
   }
@@ -197,6 +199,24 @@ export class FinisherService {
         actor: 'SYSTEM',
         actorId: null,
       });
+    }
+
+    // Проигравшим пошёл отсчёт 24 часов на возврат (FR-12). Победитель здесь
+    // известен точно — его определил тот же атомарный скрипт, что закрыл торги.
+    // Само поручение в банк отправит воркер: finisher закрывает торги, деньги
+    // двигают deposits/payments (CLAUDE.md, раздел 3).
+    //
+    // Сбой на этом шаге не отменяет завершения торгов и не должен ронять
+    // разбор остальных лотов: в Redis лот уже закрыт, исключение отсюда
+    // ничего не откатит, а только оставит соседей в очереди незакрытыми.
+    // Оставшиеся задатки подберёт сверка возвратов.
+    try {
+      await this.deposits.openRefundsForLot(outcome.lotId, outcome.winnerUserId);
+    } catch (error) {
+      this.logger.error(
+        `Лот ${outcome.lotId}: возвраты не открыты — ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 }

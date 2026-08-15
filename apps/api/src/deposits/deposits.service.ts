@@ -189,6 +189,58 @@ export class DepositsService {
   }
 
   /**
+   * Открыть возвраты по завершённому лоту (T-037, INT-04).
+   *
+   * Возвращают всем, кто внёс задаток, кроме победителя: его деньги остаются
+   * на спецсчёте и пойдут в зачёт доплаты либо будут удержаны. Runner-Up
+   * (Опция А, FR-14) появится в T-038 — до него второй участник получает
+   * возврат наравне с остальными.
+   *
+   * Переходы идут по одному через statusную машину, а не одним `updateMany`:
+   * каждое движение задатка обязано оставить запись в audit_log, а массовое
+   * обновление её не оставляет. Проигравших по лоту единицы-десятки, цена
+   * такого цикла — ничто против пропавшего следа движения денег.
+   *
+   * Идемпотентно: повторный вызов не найдёт задатков в ON_SPECIAL_ACCOUNT.
+   */
+  async openRefundsForLot(lotId: string, winnerUserId: string | null): Promise<number> {
+    const losers = await this.prisma.deposit.findMany({
+      where: {
+        lotId,
+        status: BIDDING_ALLOWED_FROM,
+        ...(winnerUserId === null ? {} : { userId: { not: winnerUserId } }),
+      },
+      select: { id: true },
+    });
+
+    let opened = 0;
+    for (const deposit of losers) {
+      try {
+        await this.transition({
+          depositId: deposit.id,
+          to: 'REFUND_PENDING',
+          actor: 'SYSTEM',
+          actorId: null,
+          reason: 'торги завершены, участник не победил',
+        });
+        opened += 1;
+      } catch (error) {
+        // Кто-то успел раньше (второй воркер, админ) — это не ошибка.
+        // Молча пропускать нельзя: пропавший возврат виден только в логе.
+        this.logger.warn(
+          `Задаток ${deposit.id}: возврат не открыт — ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    if (opened > 0) {
+      this.logger.log(`Лот ${lotId}: открыто возвратов ${String(opened)}`);
+    }
+    return opened;
+  }
+
+  /**
    * Допущен ли участник к ставкам по лоту.
    *
    * Ровно один статус даёт допуск, и проверяется он здесь, а не сравнением

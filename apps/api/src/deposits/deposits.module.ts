@@ -7,6 +7,7 @@ import { TimeModule } from '../time/time.module';
 import { DepositPaymentsService } from './deposit-payments.service';
 import { DepositsController } from './deposits.controller';
 import { DepositsService } from './deposits.service';
+import { RefundService } from './refund.service';
 
 /**
  * Задатки.
@@ -19,7 +20,7 @@ import { DepositsService } from './deposits.service';
 @Module({
   imports: [PrismaModule, TimeModule, BankProviderModule],
   controllers: [DepositsController],
-  providers: [DepositsService, DepositPaymentsService],
-  exports: [DepositsService, DepositPaymentsService],
+  providers: [DepositsService, DepositPaymentsService, RefundService],
+  exports: [DepositsService, DepositPaymentsService, RefundService],
 })
 export class DepositsModule {}

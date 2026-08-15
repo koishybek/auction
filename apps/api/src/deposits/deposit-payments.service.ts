@@ -122,8 +122,12 @@ export class DepositPaymentsService {
     return this.deposits.view({ lotId: input.lotId, userId: input.userId });
   }
 
-  /** Поручение на возврат задатка со спецсчёта (INT-04). */
-  async requestRefund(depositId: string, iban: string): Promise<string> {
+  /**
+   * Поручение на возврат задатка со спецсчёта (INT-04).
+   *
+   * `iban` по умолчанию `null` — банк вернёт деньги на счёт исходного платежа.
+   */
+  async requestRefund(depositId: string, iban: string | null = null): Promise<string> {
     const deposit = await this.prisma.deposit.findUnique({ where: { id: depositId } });
     if (deposit === null) {
       throw new NotFoundException({ code: 'DEPOSIT_NOT_FOUND' });

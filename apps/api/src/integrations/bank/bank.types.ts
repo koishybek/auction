@@ -49,8 +49,14 @@ export interface HoldResult {
 export interface RefundRequest {
   readonly reference: string;
   readonly amountTiyn: bigint;
-  /** Куда возвращаем: счёт участника. */
-  readonly iban: string;
+  /**
+   * Счёт получателя. `null` — вернуть туда, откуда пришёл платёж.
+   *
+   * Реквизитов участника у нас нет и быть не должно: деньги пришли по нашему
+   * инвойсу, и обратный адрес знает банк. Хранить чужой IBAN ради возврата
+   * значит завести ещё одну персональную запись, которую придётся защищать.
+   */
+  readonly iban: string | null;
   readonly kbe: Kbe;
   /**
    * Назначение платежа. Возврат задатка НДС не облагается, и это должно быть

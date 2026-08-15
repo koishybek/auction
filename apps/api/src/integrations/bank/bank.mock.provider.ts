@@ -33,6 +33,7 @@ export class BankMockProvider implements BankProvider {
   private readonly refunds: RefundRequest[] = [];
   private readonly splits: SplitRequest[] = [];
   private failNext = false;
+  private failRefund = false;
 
   createInvoice(request: InvoiceRequest): Promise<InvoiceResult> {
     this.invoices.push(request);
@@ -48,6 +49,11 @@ export class BankMockProvider implements BankProvider {
   }
 
   refund(request: RefundRequest): Promise<RefundResult> {
+    if (this.failRefund) {
+      // Отказ до записи: непринятое поручение — это поручение, которого не было.
+      this.failRefund = false;
+      return Promise.reject(new Error('Банк отклонил поручение на возврат'));
+    }
     this.refunds.push(request);
     return Promise.resolve({ refundId: `ref-${randomUUID()}` });
   }
@@ -86,6 +92,11 @@ export class BankMockProvider implements BankProvider {
     this.failNext = true;
   }
 
+  /** Следующее поручение на возврат банк отклонит. */
+  failRefundOnce(): void {
+    this.failRefund = true;
+  }
+
   invoicesSent(): readonly InvoiceRequest[] {
     return this.invoices;
   }
@@ -108,5 +119,6 @@ export class BankMockProvider implements BankProvider {
     this.refunds.length = 0;
     this.splits.length = 0;
     this.failNext = false;
+    this.failRefund = false;
   }
 }
