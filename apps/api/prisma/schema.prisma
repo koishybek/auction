@@ -271,6 +271,9 @@ model Deposit {
   bankRef    String?       @map("bank_ref")
   /// Ссылка поручения на возврат. Непусто = TRIGGER_REFUND уже ушёл в банк (T-037).
   refundRef  String?       @map("refund_ref")
+  /// Сценарий Runner-Up (FR-14): срок текущего шага — сначала выбора опции,
+  /// потом удержания по Опции А. Непусто = этот задаток принадлежит участнику №2.
+  runnerUpUntil DateTime? @map("runner_up_until") @db.Timestamptz(3)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

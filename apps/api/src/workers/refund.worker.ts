@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 
 import { RefundService } from '../deposits/refund.service';
+import { RunnerUpService } from '../deposits/runner-up.service';
 
 /**
  * Как часто разбирается очередь возвратов.
@@ -30,7 +31,10 @@ export class RefundWorker implements OnModuleInit, OnModuleDestroy {
   private running = false;
   private sweeps = 0;
 
-  constructor(private readonly refunds: RefundService) {}
+  constructor(
+    private readonly refunds: RefundService,
+    private readonly runnerUp: RunnerUpService,
+  ) {}
 
   onModuleInit(): void {
     this.timer = setInterval(() => {
@@ -54,6 +58,10 @@ export class RefundWorker implements OnModuleInit, OnModuleDestroy {
     }
     this.running = true;
     try {
+      // Сначала истёкшие шаги Runner-Up, потом отправка: задаток, у которого
+      // только что кончился срок, обязан уехать в банк этим же заходом, а не
+      // ждать следующего.
+      await this.runnerUp.expireDue();
       const sent = await this.refunds.triggerDue();
       this.sweeps += 1;
       if (this.sweeps % OVERDUE_EVERY === 0) {

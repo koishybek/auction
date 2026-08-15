@@ -136,6 +136,12 @@ export class DepositsService {
     actor: DepositTransitionActor;
     actorId: string | null;
     reason?: string;
+    /**
+     * Явный срок возврата. По умолчанию сутки от «сейчас», но у участника №2
+     * отсчёт идёт от закрытия торгов: час на размышление не должен растягивать
+     * обещанные ТЗ 24 часа до двадцати пяти (FR-14).
+     */
+    refundDeadlineAt?: Date;
   }): Promise<DepositStatus> {
     const deposit = await this.prisma.deposit.findUnique({ where: { id: input.depositId } });
     if (deposit === null) {
@@ -154,7 +160,10 @@ export class DepositsService {
         // Возврат обязан уложиться в сутки (FR-12) — дедлайн ставится здесь,
         // чтобы воркер возвратов не вычислял его заново и не разошёлся с нами.
         ...(input.to === 'REFUND_PENDING'
-          ? { refundDeadlineAt: new Date(this.time.wallClockMs() + REFUND_SLA_MS) }
+          ? {
+              refundDeadlineAt:
+                input.refundDeadlineAt ?? new Date(this.time.wallClockMs() + REFUND_SLA_MS),
+            }
           : {}),
       },
     });
@@ -191,10 +200,11 @@ export class DepositsService {
   /**
    * Открыть возвраты по завершённому лоту (T-037, INT-04).
    *
-   * Возвращают всем, кто внёс задаток, кроме победителя: его деньги остаются
-   * на спецсчёте и пойдут в зачёт доплаты либо будут удержаны. Runner-Up
-   * (Опция А, FR-14) появится в T-038 — до него второй участник получает
-   * возврат наравне с остальными.
+   * Возвращают всем, кто внёс задаток, кроме двоих. Победитель: его деньги
+   * остаются на спецсчёте и пойдут в зачёт доплаты либо будут удержаны.
+   * Участник №2: у него по FR-14 есть выбор из двух опций, и до ответа его
+   * задаток трогать нельзя — задатки со сроком сценария Runner-Up сюда не
+   * попадают вовсе.
    *
    * Переходы идут по одному через statusную машину, а не одним `updateMany`:
    * каждое движение задатка обязано оставить запись в audit_log, а массовое
@@ -203,12 +213,20 @@ export class DepositsService {
    *
    * Идемпотентно: повторный вызов не найдёт задатков в ON_SPECIAL_ACCOUNT.
    */
-  async openRefundsForLot(lotId: string, winnerUserId: string | null): Promise<number> {
+  async openRefundsForLot(
+    lotId: string,
+    keep: { winnerUserId: string | null; runnerUpUserId?: string | null },
+  ): Promise<number> {
+    const excluded = [keep.winnerUserId, keep.runnerUpUserId ?? null].filter(
+      (id): id is string => id !== null,
+    );
     const losers = await this.prisma.deposit.findMany({
       where: {
         lotId,
         status: BIDDING_ALLOWED_FROM,
-        ...(winnerUserId === null ? {} : { userId: { not: winnerUserId } }),
+        // Сценарий Runner-Up идёт своим чередом и заканчивается возвратом сам.
+        runnerUpUntil: null,
+        ...(excluded.length === 0 ? {} : { userId: { notIn: excluded } }),
       },
       select: { id: true },
     });

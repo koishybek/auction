@@ -152,7 +152,9 @@ export class RefundService {
         continue;
       }
 
-      opened += await this.deposits.openRefundsForLot(session.lotId, top?.userId ?? null);
+      opened += await this.deposits.openRefundsForLot(session.lotId, {
+        winnerUserId: top?.userId ?? null,
+      });
     }
 
     if (opened > 0) {

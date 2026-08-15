@@ -344,6 +344,6 @@ describe('T-037: авто-возврат SLA 24 часа', () => {
     expect(await refunds.overdue()).toBe(3);
 
     // Открытие возвратов идемпотентно: повтор ничего не удваивает.
-    expect(await deposits.openRefundsForLot(lotId, winner)).toBe(0);
+    expect(await deposits.openRefundsForLot(lotId, { winnerUserId: winner })).toBe(0);
   });
 });

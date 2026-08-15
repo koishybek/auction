@@ -47,7 +47,7 @@ return string.format('%.0f', nextPriceTiyn(tonumber(price)))
 const PLACE_BID = `
 ${NEXT_PRICE_LUA}
 local state = redis.call('HMGET', KEYS[1],
-  'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId', 'lastBidderId')
+  'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId', 'lastBidderId', 'lastBlindCode')
 if not state[1] then
   return { 'NO_SESSION' }
 end
@@ -80,10 +80,18 @@ end
 local seq = tonumber(state[3]) + 1
 local newDeadlineMs = nowMs + tonumber(ARGV[4])
 
+-- Предыдущий лидер запоминается тем же шагом: закрывшись, торги обязаны
+-- назвать не только победителя, но и участника №2 — ему по FR-14 достаётся
+-- выбор из двух опций. Вычислять его потом по ставкам в PostgreSQL нельзя:
+-- ставки доезжают туда асинхронно, а решение об удержании его задатка
+-- принимается в момент закрытия. Self-outbid запрещён, поэтому предыдущий
+-- лидер — всегда другой человек, а не тот же самый.
 redis.call('HSET', KEYS[1],
   'priceTiyn', string.format('%.0f', nextTiyn),
   'seq', tostring(seq),
   'deadlineMs', string.format('%.0f', newDeadlineMs),
+  'prevBidderId', state[6] or '',
+  'prevBlindCode', state[7] or '',
   'lastBidderId', ARGV[2],
   'lastBlindCode', ARGV[3])
 redis.call('PEXPIRE', KEYS[1], tonumber(ARGV[5]))

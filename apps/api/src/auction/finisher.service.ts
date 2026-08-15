@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { DepositsService } from '../deposits/deposits.service';
+import { RunnerUpService } from '../deposits/runner-up.service';
 import { LotsService } from '../lots/lots.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
@@ -24,7 +25,8 @@ import { NOW_MS_LUA } from './lua/primitives';
  */
 const FINISH_SESSION = `
 local state = redis.call('HMGET', KEYS[1],
-  'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId', 'lastBidderId', 'lastBlindCode')
+  'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId', 'lastBidderId', 'lastBlindCode',
+  'prevBidderId', 'prevBlindCode')
 if not state[1] then
   redis.call('ZREM', KEYS[2], ARGV[2])
   return { 'GONE' }
@@ -63,7 +65,9 @@ return {
   winner or '',
   state[6] or '',
   state[5],
-  string.format('%.0f', nowMs)
+  string.format('%.0f', nowMs),
+  state[8] or '',
+  state[9] or ''
 }
 `;
 
@@ -77,6 +81,9 @@ export type FinishOutcome =
       readonly seq: number;
       readonly winnerBlindId: string | null;
       readonly winnerUserId: string | null;
+      /** Участник №2 — ему по FR-14 достаётся выбор из двух опций. */
+      readonly runnerUpUserId: string | null;
+      readonly runnerUpBlindId: string | null;
       readonly finishedAtMs: number;
     }
   | { readonly kind: 'STILL_RUNNING'; readonly lotId: string; readonly remainingMs: number }
@@ -106,6 +113,7 @@ export class FinisherService {
     private readonly prisma: PrismaService,
     private readonly lots: LotsService,
     private readonly deposits: DepositsService,
+    private readonly runnerUp: RunnerUpService,
   ) {
     this.finishScript = redis.script(FINISH_SESSION);
   }
@@ -155,6 +163,8 @@ export class FinisherService {
       seq: Number(parts[2] ?? '0'),
       winnerBlindId: parts[3] === '' ? null : (parts[3] ?? null),
       winnerUserId: parts[4] === '' ? null : (parts[4] ?? null),
+      runnerUpUserId: parts[7] === '' ? null : (parts[7] ?? null),
+      runnerUpBlindId: parts[8] === '' ? null : (parts[8] ?? null),
       finishedAtMs: Number(parts[6] ?? '0'),
     };
 
@@ -211,7 +221,20 @@ export class FinisherService {
     // ничего не откатит, а только оставит соседей в очереди незакрытыми.
     // Оставшиеся задатки подберёт сверка возвратов.
     try {
-      await this.deposits.openRefundsForLot(outcome.lotId, outcome.winnerUserId);
+      // Участнику №2 сначала предлагается выбор (FR-14) — его задаток в общий
+      // возврат не идёт. Предложить нужно ДО открытия возвратов: иначе между
+      // двумя шагами воркер успеет отправить поручение по его задатку.
+      if (outcome.runnerUpUserId !== null) {
+        await this.runnerUp.offer({
+          lotId: outcome.lotId,
+          userId: outcome.runnerUpUserId,
+          finishedAtMs: outcome.finishedAtMs,
+        });
+      }
+      await this.deposits.openRefundsForLot(outcome.lotId, {
+        winnerUserId: outcome.winnerUserId,
+        runnerUpUserId: outcome.runnerUpUserId,
+      });
     } catch (error) {
       this.logger.error(
         `Лот ${outcome.lotId}: возвраты не открыты — ` +

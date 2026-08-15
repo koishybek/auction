@@ -18,6 +18,7 @@ import { CurrentUser, RequireEgovVerified, Roles } from '../auth/decorators';
 
 import { DepositPaymentsService } from './deposit-payments.service';
 import { DepositsService } from './deposits.service';
+import { RUNNER_UP_OPTIONS, RunnerUpService, type RunnerUpView } from './runner-up.service';
 
 const HoldSchema = z
   .object({
@@ -30,6 +31,15 @@ const HoldSchema = z
   .strict();
 
 class HoldDto extends createZodDto(HoldSchema) {}
+
+const RunnerUpChoiceSchema = z
+  .object({
+    /** А — задаток остаётся под дефолт победителя, Б — возврат (FR-14). */
+    option: z.enum(RUNNER_UP_OPTIONS),
+  })
+  .strict();
+
+class RunnerUpChoiceDto extends createZodDto(RunnerUpChoiceSchema) {}
 
 /**
  * Задаток глазами участника (T-036, FR-12).
@@ -45,6 +55,7 @@ export class DepositsController {
   constructor(
     private readonly deposits: DepositsService,
     private readonly payments: DepositPaymentsService,
+    private readonly runnerUp: RunnerUpService,
   ) {}
 
   @Get()
@@ -76,5 +87,25 @@ export class DepositsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<DepositView> {
     return this.payments.holdCard({ lotId, userId: user.id, cardToken: body.cardToken });
+  }
+
+  @Get('runner-up')
+  @ApiOperation({ summary: 'Предложен ли мне выбор участника №2 (FR-14)' })
+  runnerUpView(
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<RunnerUpView> {
+    return this.runnerUp.view(lotId, user.id);
+  }
+
+  @Post('runner-up')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Выбрать опцию: А — задаток под дефолт, Б — возврат' })
+  chooseRunnerUp(
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @Body() body: RunnerUpChoiceDto,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<RunnerUpView> {
+    return this.runnerUp.choose({ lotId, userId: user.id, option: body.option });
   }
 }

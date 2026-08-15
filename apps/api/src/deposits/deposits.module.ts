@@ -8,6 +8,7 @@ import { DepositPaymentsService } from './deposit-payments.service';
 import { DepositsController } from './deposits.controller';
 import { DepositsService } from './deposits.service';
 import { RefundService } from './refund.service';
+import { RunnerUpService } from './runner-up.service';
 
 /**
  * Задатки.
@@ -20,7 +21,7 @@ import { RefundService } from './refund.service';
 @Module({
   imports: [PrismaModule, TimeModule, BankProviderModule],
   controllers: [DepositsController],
-  providers: [DepositsService, DepositPaymentsService, RefundService],
-  exports: [DepositsService, DepositPaymentsService, RefundService],
+  providers: [DepositsService, DepositPaymentsService, RefundService, RunnerUpService],
+  exports: [DepositsService, DepositPaymentsService, RefundService, RunnerUpService],
 })
 export class DepositsModule {}
