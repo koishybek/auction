@@ -1,6 +1,7 @@
 import type { BidDenyCode, BidRejectCode } from '@auction/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
+import { DepositsService } from '../deposits/deposits.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { BidService, type BidOutcome } from './bid.service';
@@ -38,6 +39,7 @@ export class BidPlacementService {
     private readonly bids: BidService,
     private readonly blindIds: BlindIdService,
     private readonly rateLimit: BidRateLimitService,
+    private readonly deposits: DepositsService,
   ) {}
 
   /**
@@ -126,13 +128,10 @@ export class BidPlacementService {
       return 'SELLER_OWN_LOT';
     }
 
-    const deposit = await this.prisma.deposit.findUnique({
-      where: { userId_lotId: { userId, lotId } },
-      select: { status: true },
-    });
-    if (deposit?.status !== 'ON_SPECIAL_ACCOUNT') {
-      // Без задатка на спецсчёте ставка не принимается ни при каких условиях:
-      // иначе цену поднимает тот, кто не может заплатить.
+    // Без задатка на спецсчёте ставка не принимается ни при каких условиях:
+    // иначе цену поднимает тот, кто не может заплатить. Условие живёт в
+    // статусной машине задатка (T-034), а не сравнением строк здесь.
+    if (!(await this.deposits.isAllowedToBid(userId, lotId))) {
       return 'NO_DEPOSIT';
     }
 
