@@ -143,21 +143,35 @@ describe('T-031: лимит частоты ставок', () => {
     const sessionId = randomUUID();
     const results: PlacementResult[] = [];
 
-    // Три клика подряд с интервалом ~150 мс: суммарно меньше 500 мс окна.
+    /**
+     * Сумма считается один раз до кликов, и пауз между ними нет.
+     *
+     * Первая версия ставила по 150 мс между кликами и спрашивала цену перед
+     * каждым — «похоже на человека». На загруженной машине три круга в Redis и
+     * PostgreSQL вылезли за 500 мс, окно лимита успело истечь, и третий клик
+     * получил SELF_OUTBID вместо RATE_LIMITED. Тест проверял скорость машины,
+     * а не лимит. Принята только первая ставка, поэтому сумма остаётся верной
+     * для всех трёх попыток.
+     */
+    const amount = await bids.nextPriceTiyn(lot.id);
+    const startedAt = Date.now();
+
     for (let click = 0; click < 3; click += 1) {
       results.push(
         await placement.place({
           lotId: lot.id,
           userId: buyer,
-          expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+          expectedAmountTiyn: amount,
           sessionId,
           ip: '203.0.113.7',
         }),
       );
-      if (click < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 150));
-      }
     }
+
+    // Предпосылка проверяется, а не предполагается: не уложились в окно —
+    // тест обязан сказать об этом прямо, а не выдать загадочный отказ.
+    const elapsed = Date.now() - startedAt;
+    expect(elapsed, 'три клика должны уложиться в окно лимита').toBeLessThan(500);
 
     expect(results.map(codeOf)).toEqual(['ACCEPTED', 'RATE_LIMITED', 'RATE_LIMITED']);
 

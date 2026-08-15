@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { LotsModule } from '../lots/lots.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 
 import { AuctionStateService } from './auction-state.service';
@@ -22,7 +23,7 @@ import { SlaFreezeService } from './sla-freeze.service';
  * статус сессии.
  */
 @Module({
-  imports: [PrismaModule, LotsModule],
+  imports: [PrismaModule, LotsModule, NotificationsModule],
   controllers: [AuctionController, AdminAuctionController],
   providers: [
     AuctionService,

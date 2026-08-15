@@ -110,7 +110,7 @@ auction/
 │   │   ├── deposits/      (план) задатки 10 %, SLA-24h возвраты, Runner-Up
 │   │   ├── payments/      (план) 90 %-доплата, Payment Splitter, Ref-Bonus
 │   │   ├── partners/      (план) лиды, закрепление 90 дней, бонусы
-│   │   ├── notifications/ (план) push/SMS через адаптер
+│   │   ├── notifications/       push/SMS через адаптер: интерфейс + мок
 │   │   └── documents/     (план) протокол торгов, Акт ВЕТО (PDF), S3
 │   └── web/               Next.js (App Router, SSR) + Tailwind v4 + Zustand
 │       ├── src/app/             роуты и layout

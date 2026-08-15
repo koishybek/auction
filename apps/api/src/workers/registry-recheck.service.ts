@@ -3,6 +3,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { PiiCryptoService } from '../common/crypto/pii-crypto.service';
 import { REGISTRY_PROVIDER, type RegistryProvider } from '../integrations/registry/registry.types';
 import { LotsService } from '../lots/lots.service';
+import { NotificationsService } from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
@@ -45,6 +46,7 @@ export class RegistryRecheckService {
     private readonly pii: PiiCryptoService,
     private readonly lots: LotsService,
     private readonly time: TimeService,
+    private readonly notifications: NotificationsService,
     @Inject(REGISTRY_PROVIDER) private readonly registry: RegistryProvider,
   ) {}
 
@@ -123,12 +125,12 @@ export class RegistryRecheckService {
       this.logger.error(
         `Лот ${lot.id}: ограничение реестра во время торгов — ${result.restrictions.join('; ')}`,
       );
-      await this.notifyAdmins(TEMPLATE_RESTRICTION_DURING_BIDDING);
+      await this.notifyAdmins(TEMPLATE_RESTRICTION_DURING_BIDDING, lot.id);
       return { kind: 'RESTRICTED_WHILE_LIVE', restrictions: result.restrictions };
     }
 
     await this.lots.transition({ lotId: lot.id, to: 'PAUSED', actor: 'SYSTEM', actorId: null });
-    await this.notify(lot.sellerId, TEMPLATE_LOT_PAUSED);
+    await this.notify(lot.sellerId, TEMPLATE_LOT_PAUSED, lot.id);
 
     this.logger.warn(`Лот ${lot.id} остановлен: ${result.restrictions.join('; ')}`);
     return { kind: 'PAUSED', restrictions: result.restrictions };
@@ -139,24 +141,24 @@ export class RegistryRecheckService {
    * адаптер Push/SMS (T-033) — здесь мы фиксируем, что уведомить нужно, а не
    * притворяемся, что уже уведомили.
    */
-  private async notify(userId: string, template: string): Promise<void> {
-    await this.prisma.notification.create({
-      data: { userId, channel: 'PUSH', template, status: 'PENDING' },
-    });
+  private async notify(userId: string, template: string, lotId: string): Promise<void> {
+    await this.notifications.notify({ userId, template, params: { lot_id: lotId } });
   }
 
-  private async notifyAdmins(template: string): Promise<void> {
+  private async notifyAdmins(template: string, lotId: string): Promise<void> {
     const admins = await this.prisma.user.findMany({
       where: { roles: { has: 'ADMIN' }, status: 'ACTIVE' },
       select: { id: true },
     });
-    await this.prisma.notification.createMany({
-      data: admins.map((admin) => ({
+    for (const admin of admins) {
+      // Ограничение реестра во время торгов — инцидент, а не рутина: он должен
+      // дойти до человека быстрее, чем закончится лот (ОВ-13).
+      await this.notifications.notify({
         userId: admin.id,
-        channel: 'PUSH' as const,
         template,
-        status: 'PENDING' as const,
-      })),
-    });
+        priority: 'HIGH',
+        params: { lot_id: lotId },
+      });
+    }
   }
 }

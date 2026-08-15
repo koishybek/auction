@@ -248,11 +248,13 @@ describe('T-020: крон-перепроверка ЕРД', () => {
     expect(checks).toHaveLength(3);
     expect(checks.map((check) => check.hasRestriction)).toEqual([false, false, true]);
 
-    // Продавцу поставлено уведомление; отправку заберёт адаптер (T-033).
+    // Продавец уведомлён. С появлением адаптера (T-033) уведомление не просто
+    // ставится в очередь, а уходит: статус SENT, а не PENDING.
     const notifications = await prisma.notification.findMany({ where: { userId: sellerId } });
     expect(notifications).toHaveLength(1);
     expect(notifications[0]?.template).toBe('lot.paused.registry_restriction');
-    expect(notifications[0]?.status).toBe('PENDING');
+    expect(notifications[0]?.status).toBe('SENT');
+    expect(notifications[0]?.sentAt).not.toBeNull();
 
     // Остановка прошла через статусную машину, а не в обход: есть запись аудита.
     const audit = await prisma.auditLog.findMany({

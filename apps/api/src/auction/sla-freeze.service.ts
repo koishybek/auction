@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import {
+  NotificationsService,
+  TEMPLATE_SLA_FREEZE,
+  TEMPLATE_SLA_RESUME,
+} from '../notifications/notifications.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { AuctionStateService } from './auction-state.service';
@@ -39,6 +44,7 @@ export class SlaFreezeService {
     private readonly state: AuctionStateService,
     private readonly bids: BidService,
     private readonly prisma: PrismaService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   /**
@@ -70,6 +76,24 @@ export class SlaFreezeService {
       data: { status: 'FROZEN', freezeSnapshotMs: frozen.remainingMs },
     });
 
+    /**
+     * Приоритетное уведомление всем участникам (ТЗ §2.2).
+     *
+     * Человек в этот момент смотрит на замерший таймер и не знает почему.
+     * Не сказать ему — значит оставить его думать, что торги сломались или
+     * что его обманывают. Поэтому HIGH и поэтому всем сразу.
+     */
+    await this.notifications.notifyLotParticipants({
+      lotId,
+      template: TEMPLATE_SLA_FREEZE,
+      priority: 'HIGH',
+      params: {
+        lot_id: lotId,
+        time_remaining_ms: frozen.remainingMs,
+        resume_in_ms: FREEZE_DURATION_MS,
+      },
+    });
+
     this.logger.warn(
       `Лот ${lotId}: SLA Freeze — ${reason}, остаток ${String(frozen.remainingMs)} мс`,
     );
@@ -90,6 +114,14 @@ export class SlaFreezeService {
         freezeSnapshotMs: null,
         deadlineAt: new Date(resumed.deadlineMs),
       },
+    });
+
+    // О возобновлении сообщаем обычным приоритетом: таймер снова идёт, и это
+    // видно на экране — паники, в отличие от заморозки, тут нет.
+    await this.notifications.notifyLotParticipants({
+      lotId,
+      template: TEMPLATE_SLA_RESUME,
+      params: { lot_id: lotId, time_remaining_ms: resumed.remainingMs },
     });
 
     this.logger.log(`Лот ${lotId}: торги возобновлены, остаток ${String(resumed.remainingMs)} мс`);

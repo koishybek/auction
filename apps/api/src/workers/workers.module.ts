@@ -4,6 +4,7 @@ import { AuctionModule } from '../auction/auction.module';
 import { CryptoModule } from '../common/crypto/crypto.module';
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { LotsModule } from '../lots/lots.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
@@ -26,7 +27,15 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
  * привилегии менять статус в обход правил.
  */
 @Module({
-  imports: [PrismaModule, CryptoModule, TimeModule, RegistryModule, LotsModule, AuctionModule],
+  imports: [
+    PrismaModule,
+    CryptoModule,
+    TimeModule,
+    RegistryModule,
+    LotsModule,
+    AuctionModule,
+    NotificationsModule,
+  ],
   providers: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker, BidPersistWorker],
   exports: [RegistryRecheckService, RegistryRecheckWorker, FinisherWorker, BidPersistWorker],
 })
