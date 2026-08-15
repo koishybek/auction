@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { DepositWidget } from '@/components/deposit-widget';
 import { PhaseRatchet, phaseLabel } from '@/components/phase-ratchet';
 import { ViewBeacon } from '@/components/view-beacon';
 import { getLot } from '@/lib/api-client';
@@ -71,6 +72,14 @@ export default async function LotPage({ params }: PageProps) {
       </header>
 
       <PriceLadder lot={lot} price={price} />
+
+      {/*
+       * Задаток вносится на Фазе II (допуск участников) и остаётся виден в
+       * торгах: участнику важно понимать, почему кнопка ставки не работает.
+       */}
+      {(lot.status === 'PHASE_II' || lot.status === 'PHASE_III') && (
+        <DepositWidget lotId={lot.id} />
+      )}
 
       <section aria-labelledby="rules-title" className="mt-20">
         <h2 id="rules-title" className="eyebrow mb-6">

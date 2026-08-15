@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
 import { DepositPaymentsService } from './deposit-payments.service';
+import { DepositsController } from './deposits.controller';
 import { DepositsService } from './deposits.service';
 
 /**
@@ -17,6 +18,7 @@ import { DepositsService } from './deposits.service';
  */
 @Module({
   imports: [PrismaModule, TimeModule, BankProviderModule],
+  controllers: [DepositsController],
   providers: [DepositsService, DepositPaymentsService],
   exports: [DepositsService, DepositPaymentsService],
 })

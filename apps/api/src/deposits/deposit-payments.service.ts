@@ -1,3 +1,4 @@
+import type { DepositView } from '@auction/shared';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import {
@@ -67,10 +68,7 @@ export class DepositPaymentsService {
    * Повторный вызов не плодит задатков и просто выставляет счёт заново —
    * человек мог потерять ссылку.
    */
-  async requestPayment(input: {
-    lotId: string;
-    userId: string;
-  }): Promise<{ depositId: string; amountTiyn: bigint; payUrl: string; status: string }> {
+  async requestPayment(input: { lotId: string; userId: string }): Promise<DepositView> {
     const deposit = await this.deposits.open(input);
 
     const invoice = await this.bank.createInvoice({
@@ -86,12 +84,42 @@ export class DepositPaymentsService {
       data: { bankRef: invoice.invoiceId },
     });
 
-    return {
-      depositId: deposit.id,
+    // Наружу уходит только view: id задатка и тиыны — внутренние величины,
+    // а bigint в JSON не сериализуется вовсе (CLAUDE.md §4.1).
+    const view = await this.deposits.view(input);
+    return { ...view, payUrl: invoice.payUrl };
+  }
+
+  /**
+   * Заблокировать сумму на карте (hold-эквайринг, ТЗ §5.2).
+   *
+   * Блокировка — не зачисление: деньги видны банку, но не лежат на спецсчёте,
+   * поэтому к торгам такой задаток ещё не допускает (статус HELD). Перевод на
+   * спецсчёт делает банк отдельным событием.
+   */
+  async holdCard(input: {
+    lotId: string;
+    userId: string;
+    cardToken: string;
+  }): Promise<DepositView> {
+    const deposit = await this.deposits.open({ lotId: input.lotId, userId: input.userId });
+
+    const hold = await this.bank.holdCard({
+      reference: deposit.id,
       amountTiyn: deposit.amountTiyn,
-      payUrl: invoice.payUrl,
-      status: deposit.status,
-    };
+      cardToken: input.cardToken,
+    });
+
+    if (deposit.status === 'PENDING') {
+      await this.deposits.transition({
+        depositId: deposit.id,
+        to: 'HELD',
+        actor: 'BANK',
+        actorId: null,
+        reason: `блокировка ${hold.holdId}`,
+      });
+    }
+    return this.deposits.view({ lotId: input.lotId, userId: input.userId });
   }
 
   /** Поручение на возврат задатка со спецсчёта (INT-04). */

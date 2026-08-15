@@ -66,6 +66,15 @@ async function arena(): Promise<{ lotId: string; buyer: string }> {
   return { lotId: lot.id, buyer: buyer.id };
 }
 
+/**
+ * Ссылка платежа — это id задатка. Наружу сервис его не отдаёт: браузеру он не
+ * нужен, а bigint рядом с ним в JSON не сериализуется вовсе.
+ */
+async function depositIdOf(lotId: string): Promise<string> {
+  const deposit = await prisma.deposit.findFirstOrThrow({ where: { lotId } });
+  return deposit.id;
+}
+
 async function tryBid(lotId: string, userId: string): Promise<string> {
   const result = await placement.place({
     lotId,
@@ -107,16 +116,17 @@ describe('T-035: банк-адаптер', () => {
     const { lotId, buyer } = await arena();
 
     const invoice = await payments.requestPayment({ lotId, userId: buyer });
-    expect(invoice.amountTiyn).toBe(DEPOSIT_TIYN);
+    expect(invoice.requiredAmountTenge).toBe(Number(DEPOSIT_TIYN / 100n));
     expect(invoice.payUrl).toMatch(/^https:\/\//);
+    const depositId = await depositIdOf(lotId);
 
     // До оплаты ставить нельзя — счёт выставлен, деньги не пришли.
     expect(await tryBid(lotId, buyer)).toBe('NO_DEPOSIT');
 
-    const outcome = await payments.handleWebhook(bank.emitPayment(invoice.depositId, DEPOSIT_TIYN));
+    const outcome = await payments.handleWebhook(bank.emitPayment(depositId, DEPOSIT_TIYN));
     expect(outcome.kind).toBe('APPLIED');
 
-    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: invoice.depositId } });
+    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: depositId } });
     expect(stored.status).toBe('ON_SPECIAL_ACCOUNT');
     expect(stored.bankRef).not.toBeNull();
 
@@ -139,8 +149,9 @@ describe('T-035: банк-адаптер', () => {
 
   it('повторная доставка вебхука ничего не удваивает', async () => {
     const { lotId, buyer } = await arena();
-    const invoice = await payments.requestPayment({ lotId, userId: buyer });
-    const event = bank.emitPayment(invoice.depositId, DEPOSIT_TIYN);
+    await payments.requestPayment({ lotId, userId: buyer });
+    const depositId = await depositIdOf(lotId);
+    const event = bank.emitPayment(depositId, DEPOSIT_TIYN);
 
     // Банк повторяет вебхук, пока не получит подтверждения. Одно и то же
     // событие обязано доехать сколько угодно раз с одним результатом.
@@ -149,40 +160,40 @@ describe('T-035: банк-адаптер', () => {
     expect((await payments.handleWebhook(event)).kind).toBe('DUPLICATE');
 
     const audit = await prisma.auditLog.findMany({
-      where: { entity: 'deposits', entityId: invoice.depositId },
+      where: { entity: 'deposits', entityId: depositId },
     });
     expect(audit).toHaveLength(1);
   });
 
   it('платёж не на ту сумму к торгам не допускает', async () => {
     const { lotId, buyer } = await arena();
-    const invoice = await payments.requestPayment({ lotId, userId: buyer });
+    await payments.requestPayment({ lotId, userId: buyer });
+    const depositId = await depositIdOf(lotId);
 
     // Недоплаченный задаток — не задаток. Один тиын разницы значит столько же,
     // сколько миллион: сумма либо сошлась, либо нет.
-    const outcome = await payments.handleWebhook(
-      bank.emitPayment(invoice.depositId, DEPOSIT_TIYN - 1n),
-    );
+    const outcome = await payments.handleWebhook(bank.emitPayment(depositId, DEPOSIT_TIYN - 1n));
     expect(outcome.kind).toBe('AMOUNT_MISMATCH');
 
-    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: invoice.depositId } });
+    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: depositId } });
     expect(stored.status).toBe('PENDING');
     expect(await tryBid(lotId, buyer)).toBe('NO_DEPOSIT');
   });
 
   it('неудачный платёж оставляет задаток неоплаченным', async () => {
     const { lotId, buyer } = await arena();
-    const invoice = await payments.requestPayment({ lotId, userId: buyer });
+    await payments.requestPayment({ lotId, userId: buyer });
+    const depositId = await depositIdOf(lotId);
 
     bank.failPaymentOnce();
-    await payments.handleWebhook(bank.emitPayment(invoice.depositId, DEPOSIT_TIYN));
+    await payments.handleWebhook(bank.emitPayment(depositId, DEPOSIT_TIYN));
 
-    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: invoice.depositId } });
+    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: depositId } });
     expect(stored.status).toBe('PENDING');
     expect(await tryBid(lotId, buyer)).toBe('NO_DEPOSIT');
 
     // Со второй попытки платёж проходит — отказ банка не выжигает задаток.
-    await payments.handleWebhook(bank.emitPayment(invoice.depositId, DEPOSIT_TIYN));
+    await payments.handleWebhook(bank.emitPayment(depositId, DEPOSIT_TIYN));
     expect(await tryBid(lotId, buyer)).toBe('ACCEPTED');
   });
 
@@ -197,26 +208,31 @@ describe('T-035: банк-адаптер', () => {
 
   it('повторный запрос счёта не плодит задатков', async () => {
     const { lotId, buyer } = await arena();
-    const first = await payments.requestPayment({ lotId, userId: buyer });
-    const second = await payments.requestPayment({ lotId, userId: buyer });
+    await payments.requestPayment({ lotId, userId: buyer });
+    await payments.requestPayment({ lotId, userId: buyer });
 
-    expect(second.depositId).toBe(first.depositId);
     expect(await prisma.deposit.count({ where: { lotId, userId: buyer } })).toBe(1);
+    // Счёт выставлен дважды — задаток остался один и тот же.
+    expect(bank.invoicesSent().map((request) => request.reference)).toEqual([
+      await depositIdOf(lotId),
+      await depositIdOf(lotId),
+    ]);
   });
 
   it('возврат уходит поручением без НДС и закрывается вебхуком', async () => {
     const { lotId, buyer } = await arena();
-    const invoice = await payments.requestPayment({ lotId, userId: buyer });
-    await payments.handleWebhook(bank.emitPayment(invoice.depositId, DEPOSIT_TIYN));
+    await payments.requestPayment({ lotId, userId: buyer });
+    const depositId = await depositIdOf(lotId);
+    await payments.handleWebhook(bank.emitPayment(depositId, DEPOSIT_TIYN));
 
     await deposits.transition({
-      depositId: invoice.depositId,
+      depositId,
       to: 'REFUND_PENDING',
       actor: 'SYSTEM',
       actorId: null,
       reason: 'торги завершены, участник не победил',
     });
-    await payments.requestRefund(invoice.depositId, 'KZ11111111111111111111');
+    await payments.requestRefund(depositId, 'KZ11111111111111111111');
 
     const order = bank.refundsSent()[0];
     expect(order?.amountTiyn).toBe(DEPOSIT_TIYN);
@@ -225,23 +241,24 @@ describe('T-035: банк-адаптер', () => {
     // Возврат задатка НДС не облагается (ТЗ §5.2, INT-04).
     expect(order?.purpose).toContain('Без НДС');
 
-    await payments.handleWebhook(bank.emitRefund(invoice.depositId, DEPOSIT_TIYN));
-    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: invoice.depositId } });
+    await payments.handleWebhook(bank.emitRefund(depositId, DEPOSIT_TIYN));
+    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: depositId } });
     expect(stored.status).toBe('REFUNDED');
   });
 
   it('подтверждение возврата в обход REFUND_PENDING не проходит', async () => {
     const { lotId, buyer } = await arena();
-    const invoice = await payments.requestPayment({ lotId, userId: buyer });
-    await payments.handleWebhook(bank.emitPayment(invoice.depositId, DEPOSIT_TIYN));
+    await payments.requestPayment({ lotId, userId: buyer });
+    const depositId = await depositIdOf(lotId);
+    await payments.handleWebhook(bank.emitPayment(depositId, DEPOSIT_TIYN));
 
     // Деньги на спецсчёте, поручения не было — «возврат подтверждён» тут
     // означает потерянную запись, а не возвращённые деньги.
     await expect(
-      payments.handleWebhook(bank.emitRefund(invoice.depositId, DEPOSIT_TIYN)),
+      payments.handleWebhook(bank.emitRefund(depositId, DEPOSIT_TIYN)),
     ).rejects.toThrow();
 
-    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: invoice.depositId } });
+    const stored = await prisma.deposit.findUniqueOrThrow({ where: { id: depositId } });
     expect(stored.status).toBe('ON_SPECIAL_ACCOUNT');
   });
 

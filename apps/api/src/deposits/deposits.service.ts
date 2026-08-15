@@ -1,3 +1,4 @@
+import { toTenge, tiyn, type DepositView } from '@auction/shared';
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
 import type { DepositStatus } from '../generated/prisma/enums';
@@ -13,6 +14,22 @@ import {
 
 /** Доля стартовой цены, которую участник вносит задатком (ТЗ, FR-12). */
 export const DEPOSIT_SHARE_DIVISOR = 10n;
+
+/**
+ * Десять процентов стартовой цены с округлением ВВЕРХ до целого тенге.
+ *
+ * Округление нужно, потому что десятая часть цены в тиынах не обязана быть
+ * кратной тенге: лот за 1005 ₸ даёт задаток 100,5 ₸, а наружу мы отдаём целые
+ * тенге (CLAUDE.md §4.2) — такая сумма просто не представима на проводе.
+ *
+ * Вверх, а не банковским округлением, как у шага: шаг — это цена, где важна
+ * симметрия, а задаток — гарантия. Недобор гарантийной суммы недопустим, а
+ * лишний тенге вернётся участнику вместе с задатком.
+ */
+function depositAmountTiyn(startPriceTiyn: bigint): bigint {
+  const perTenge = DEPOSIT_SHARE_DIVISOR * 100n;
+  return ((startPriceTiyn + perTenge - 1n) / perTenge) * 100n;
+}
 
 /**
  * Задатки (T-034, FR-12).
@@ -45,7 +62,41 @@ export class DepositsService {
     if (lot === null) {
       throw new NotFoundException({ code: 'LOT_NOT_FOUND' });
     }
-    return lot.startPriceTiyn / DEPOSIT_SHARE_DIVISOR;
+    return depositAmountTiyn(lot.startPriceTiyn);
+  }
+
+  /**
+   * Состояние задатка для интерфейса участника (T-036, FR-12).
+   *
+   * Допуск к торгам отдаётся отдельным полем, а не выводится из статуса в
+   * браузере: правило допуска существует в одном экземпляре, на сервере.
+   */
+  async view(input: { lotId: string; userId: string }): Promise<DepositView> {
+    const requiredAmountTiyn = await this.requiredAmountTiyn(input.lotId);
+    const deposit = await this.prisma.deposit.findUnique({
+      where: { userId_lotId: { userId: input.userId, lotId: input.lotId } },
+      select: { status: true, refundDeadlineAt: true },
+    });
+
+    return {
+      lotId: input.lotId,
+      status: deposit?.status ?? null,
+      requiredAmountTenge: Number(toTenge(tiyn(requiredAmountTiyn))),
+      allowedToBid: deposit?.status === BIDDING_ALLOWED_FROM,
+      payUrl: null,
+      refundRemainingMs: this.refundRemainingMs(deposit?.refundDeadlineAt ?? null),
+    };
+  }
+
+  /**
+   * Остаток SLA возврата. Отрицательного не бывает: просроченный возврат — это
+   * ноль на табло и инцидент в воркере, а не таймер, идущий в минус.
+   */
+  private refundRemainingMs(deadline: Date | null): number | null {
+    if (deadline === null) {
+      return null;
+    }
+    return Math.max(0, deadline.getTime() - this.time.wallClockMs());
   }
 
   /**

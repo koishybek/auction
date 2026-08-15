@@ -31,6 +31,7 @@ export default tseslint.config(
             'apps/api/prisma.config.ts',
             'apps/api/vitest.config.mts',
             'apps/api/vitest.config.e2e.mts',
+            'apps/web/vitest.config.mts',
           ],
         },
         tsconfigRootDir: import.meta.dirname,

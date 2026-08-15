@@ -58,6 +58,45 @@ body {
     text-transform: uppercase;
     color: var(--color-muted);
   }
+
+  /*
+   * Действия с деньгами. Обведены, а не залиты: заливка на этом фоне читается
+   * как «главное на странице», а главное на странице — цена.
+   */
+  .deposit-action {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 0.75rem 1.25rem;
+    border: 1px solid var(--color-value);
+    color: var(--color-value);
+    transition:
+      background-color 0.15s ease,
+      color 0.15s ease;
+  }
+
+  .deposit-action:hover:not(:disabled) {
+    background: var(--color-value);
+    color: var(--color-ink);
+  }
+
+  .deposit-action--ghost {
+    border-color: var(--color-rule-bright);
+    color: var(--color-muted);
+  }
+
+  .deposit-action--ghost:hover:not(:disabled) {
+    background: transparent;
+    border-color: var(--color-paper);
+    color: var(--color-paper);
+  }
+
+  /* Занятая кнопка не должна выглядеть нажимаемой: деньги дважды не вносят. */
+  .deposit-action:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
 }
 
 /*
