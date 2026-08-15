@@ -161,8 +161,8 @@ describe('T-037: авто-возврат SLA 24 часа', () => {
     expect(bank.refundsSent()).toHaveLength(0);
 
     // Два воркера заходят одновременно — ровно то, что бывает в двух подах.
-    const [first, second] = await Promise.all([refunds.triggerDue(), refunds.triggerDue()]);
-    expect(first + second).toBe(3);
+    const [sentByA, sentByB] = await Promise.all([refunds.triggerDue(), refunds.triggerDue()]);
+    expect(sentByA + sentByB).toBe(3);
 
     const sent = bank.refundsSent();
     expect(sent).toHaveLength(3);
