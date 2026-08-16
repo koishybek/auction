@@ -15,7 +15,9 @@ import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
 import { BidOutboxService } from '../src/auction/bid-outbox.service';
 import { BidService } from '../src/auction/bid.service';
+import { DepositPaymentsService } from '../src/deposits/deposit-payments.service';
 import { GatewayModule } from '../src/gateway/gateway.module';
+import { BankMockProvider } from '../src/integrations/bank/bank.mock.provider';
 import { WsGatewayService } from '../src/gateway/ws-gateway.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RealtimeModule } from '../src/realtime.module';
@@ -146,12 +148,22 @@ interface Client {
   close(): void;
 }
 
-async function connect(port: number): Promise<Client> {
-  const socket = new WebSocket(`ws://127.0.0.1:${String(port)}`);
+async function connect(port: number, cookie?: string): Promise<Client> {
+  const socket = new WebSocket(
+    `ws://127.0.0.1:${String(port)}`,
+    cookie === undefined ? undefined : { headers: { cookie } },
+  );
   const messages: Record<string, unknown>[] = [];
 
   socket.on('message', (data: unknown) => {
-    messages.push(JSON.parse(String(data)) as Record<string, unknown>);
+    const message = JSON.parse(String(data)) as Record<string, unknown>;
+    messages.push(message);
+    // Отвечаем на ping, как настоящий клиент. Молчащее соединение считается
+    // деградировавшим, и лот уходит в SLA Freeze — тест про ставку начинает
+    // падать не потому, что ставка сломана, а потому что торги заморожены.
+    if (message['event'] === 'ping' && socket.readyState === socket.OPEN) {
+      socket.send(JSON.stringify({ event: 'pong' }));
+    }
   });
 
   await new Promise<void>((resolve, reject) => {
@@ -590,6 +602,139 @@ describe('T-023: WS-gateway, комнаты и мост pub/sub', () => {
       expect(tail.map((bid) => bid['seq'])).toEqual([3, 2, 1]);
       // Реальных участников в хвосте нет (FR-09).
       expect(JSON.stringify(tail)).not.toContain(one);
+    } finally {
+      client.close();
+    }
+  });
+
+  /**
+   * Ставка по сокету (ТЗ §2.1, FR-04).
+   *
+   * До этого ядро ставки существовало без транспорта: кнопке «Сделать ставку»
+   * было некуда нажимать. Gateway здесь только транспорт — проверки и цена
+   * живут в одном пути ставки, общем для любого входа.
+   */
+  async function bidder(lotId: string): Promise<{ tokens: TokenPair; id: string }> {
+    const tokens = await egovLogin(randomIin());
+    const id = await userId(tokens);
+    const payments = app.get(DepositPaymentsService);
+    const bank = app.get(BankMockProvider);
+    await payments.requestPayment({ lotId, userId: id });
+    const deposit = await prisma.deposit.findFirstOrThrow({ where: { lotId, userId: id } });
+    await payments.handleWebhook(bank.emitPayment(deposit.id, deposit.amountTiyn));
+    return { tokens, id };
+  }
+
+  it('place_bid по сокету принимается и доходит до соседей', async () => {
+    const { lot } = await lotInAuction();
+    const investor = await bidder(lot.id);
+
+    const client = await connect(portA);
+    const watcher = await connect(portB);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id, token: investor.tokens.accessToken });
+      watcher.send({ event: 'join_lot', lot_id: lot.id });
+      const snapshot = await client.waitFor('state_snapshot');
+      await watcher.waitFor('state_snapshot');
+
+      // Ставим ровно ту сумму, что показана на кнопке.
+      client.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: snapshot['next_price_kzt'] });
+
+      const accepted = await client.waitFor('bid_accepted');
+      expect(accepted['current_price_kzt']).toBe(snapshot['next_price_kzt']);
+      expect(accepted['seq']).toBe(1);
+
+      // Остальным про ставку сообщает bid_updated, а не личный ответ.
+      const updated = await watcher.waitFor('bid_updated');
+      expect(updated['current_price_kzt']).toBe(snapshot['next_price_kzt']);
+      expect(JSON.stringify(updated)).not.toContain(investor.id);
+    } finally {
+      client.close();
+      watcher.close();
+    }
+  });
+
+  it('браузер ставит по куке, без токена в JavaScript', async () => {
+    const { lot } = await lotInAuction();
+    const investor = await bidder(lot.id);
+
+    // Кука приходит с рукопожатием — ровно так её пришлёт браузер.
+    const client = await connect(portA, `auction_at=${investor.tokens.accessToken}`);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id });
+      const snapshot = await client.waitFor('state_snapshot');
+      client.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: snapshot['next_price_kzt'] });
+      await client.waitFor('bid_accepted');
+    } finally {
+      client.close();
+    }
+  });
+
+  it('без входа ставку не принимают', async () => {
+    const { lot } = await lotInAuction();
+    const client = await connect(portA);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id });
+      const snapshot = await client.waitFor('state_snapshot');
+
+      client.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: snapshot['next_price_kzt'] });
+      const error = await client.waitFor('error');
+      expect(error['code']).toBe('INVALID_TOKEN');
+    } finally {
+      client.close();
+    }
+  });
+
+  it('ставка в лот, за которым не следишь, отклоняется', async () => {
+    const { lot } = await lotInAuction();
+    const investor = await bidder(lot.id);
+    const other = await lotInAuction();
+
+    const client = await connect(portA);
+    try {
+      client.send({ event: 'join_lot', lot_id: other.lot.id, token: investor.tokens.accessToken });
+      await client.waitFor('state_snapshot');
+
+      // Участник обязан видеть цену и таймер, на которые ставит.
+      client.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: 1_030_000 });
+      const error = await client.waitFor('error');
+      expect(error['code']).toBe('SESSION_NOT_FOUND');
+    } finally {
+      client.close();
+    }
+  });
+
+  it('чужая сумма отклоняется как PRICE_MISMATCH', async () => {
+    const { lot } = await lotInAuction();
+    const investor = await bidder(lot.id);
+
+    const client = await connect(portA);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id, token: investor.tokens.accessToken });
+      const snapshot = await client.waitFor('state_snapshot');
+
+      // Сумму назначает сервер; присланная — только сверка (QA-04).
+      client.send({
+        event: 'place_bid',
+        lot_id: lot.id,
+        amount_kzt: Number(snapshot['next_price_kzt']) + 1,
+      });
+      const rejected = await client.waitFor('bid_rejected');
+      expect(rejected['code']).toBe('PRICE_MISMATCH');
+    } finally {
+      client.close();
+    }
+  });
+
+  it('лишнее поле в ставке — отказ, а не выброшенный ключ', async () => {
+    const { lot } = await lotInAuction();
+    const client = await connect(portA);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id });
+      await client.waitFor('state_snapshot');
+      client.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: 1_030_000, blind_id: 'я' });
+      const error = await client.waitFor('error');
+      expect(error['code']).toBe('BAD_MESSAGE');
     } finally {
       client.close();
     }

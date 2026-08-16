@@ -1,6 +1,8 @@
-import { createServer, type Server } from 'node:http';
+import { createServer, type IncomingMessage, type Server } from 'node:http';
 
 import type {
+  BidAcceptedEvent,
+  BidRejectedEvent,
   BidUpdatedEvent,
   StateSnapshotEvent,
   TimerTickEvent,
@@ -8,11 +10,14 @@ import type {
 } from '@auction/shared';
 import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import type { Request } from 'express';
 import { WebSocketServer, type WebSocket } from 'ws';
 
 import { AuctionStateService } from '../auction/auction-state.service';
 import { AuctionService } from '../auction/auction.service';
+import { BidPlacementService } from '../auction/bid-placement.service';
 import { DEGRADED_RTT_MS, SlaFreezeService } from '../auction/sla-freeze.service';
+import { ACCESS_COOKIE, cookieValue } from '../auth/session-cookies';
 import { TokenService } from '../auth/token.service';
 import type { Env } from '../config/env.schema';
 import { TimeService } from '../time/time.service';
@@ -70,6 +75,8 @@ const SNAPSHOT_BIDS = 10;
 interface Connection extends RoomMember {
   readonly socket: WebSocket;
   userId: string | null;
+  /** Адрес клиента: на нём держится лимит частоты ставок (FR-10). */
+  readonly ip: string | null;
   /** Сколько тактов подряд не ответил на ping. */
   missedPongs: number;
   /** Когда отправлен последний ping — от него считается задержка. */
@@ -92,6 +99,7 @@ export class WsGatewayService implements OnModuleDestroy {
   private readonly logger = new Logger(WsGatewayService.name);
   private readonly connections = new Set<Connection>();
   private readonly defaultPort: number;
+  private readonly trustProxyHops: number;
   private http: Server | null = null;
   private wss: WebSocketServer | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
@@ -103,11 +111,13 @@ export class WsGatewayService implements OnModuleDestroy {
     private readonly auction: AuctionService,
     private readonly state: AuctionStateService,
     private readonly slaFreeze: SlaFreezeService,
+    private readonly bidPlacement: BidPlacementService,
     private readonly tokens: TokenService,
     private readonly time: TimeService,
     config: ConfigService<Env, true>,
   ) {
     this.defaultPort = config.get('GATEWAY_PORT', { infer: true });
+    this.trustProxyHops = config.get('TRUST_PROXY_HOPS', { infer: true });
   }
 
   /**
@@ -136,8 +146,8 @@ export class WsGatewayService implements OnModuleDestroy {
     });
 
     const wss = new WebSocketServer({ server: http, maxPayload: MAX_FRAME_BYTES });
-    wss.on('connection', (socket: WebSocket) => {
-      this.onConnection(socket);
+    wss.on('connection', (socket: WebSocket, request: IncomingMessage) => {
+      this.onConnection(socket, request);
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -175,11 +185,15 @@ export class WsGatewayService implements OnModuleDestroy {
     return this.connections.size;
   }
 
-  private onConnection(socket: WebSocket): void {
+  private onConnection(socket: WebSocket, request: IncomingMessage): void {
     const connection: Connection = {
       id: `ws-${String(this.nextId)}`,
       socket,
-      userId: null,
+      // Браузер предъявляет себя кукой при рукопожатии: токена в JavaScript у
+      // него нет и быть не должно. Служебные клиенты по-прежнему могут прислать
+      // токен в join_lot.
+      userId: this.userFromCookie(request),
+      ip: clientIp(request, this.trustProxyHops),
       missedPongs: 0,
       pingSentAt: null,
       rttMs: null,
@@ -226,8 +240,68 @@ export class WsGatewayService implements OnModuleDestroy {
       await this.rooms.leave(message.lot_id, connection);
       return;
     }
+    if (message.event === 'place_bid') {
+      await this.onPlaceBid(connection, message.lot_id, message.amount_kzt);
+      return;
+    }
 
     await this.onJoin(connection, message.lot_id, message.token);
+  }
+
+  /**
+   * Ставка (ТЗ §2.1, FR-04).
+   *
+   * Gateway здесь только транспорт: он не считает цену, не проверяет права и
+   * не трогает таймер. Всё это делает путь ставки, один и тот же для любого
+   * входа, — второй набор проверок рядом с денежным путём означал бы второй
+   * ответ на вопрос, принята ставка или нет.
+   *
+   * Ответ уходит только автору. Всем остальным про принятую ставку сообщает
+   * `bid_updated`, который рассылает сам Lua-скрипт через pub/sub.
+   */
+  private async onPlaceBid(
+    connection: Connection,
+    lotId: string,
+    amountTenge: number,
+  ): Promise<void> {
+    if (connection.userId === null) {
+      this.fail(connection, 'INVALID_TOKEN', 'Ставка требует входа');
+      return;
+    }
+    if (!connection.rooms.has(lotId)) {
+      // Ставить в лот, за которым не следишь, нельзя: участник обязан видеть
+      // цену и таймер, на которые ставит.
+      this.fail(connection, 'SESSION_NOT_FOUND', 'Сначала войдите в комнату лота');
+      return;
+    }
+
+    const result = await this.bidPlacement.place({
+      lotId,
+      userId: connection.userId,
+      // Тиыны из тенге: на проводе тенге, внутри системы тиыны (CLAUDE.md §4.2).
+      expectedAmountTiyn: BigInt(amountTenge) * 100n,
+      sessionId: connection.id,
+      ip: connection.ip,
+    });
+
+    if (result.status === 'ACCEPTED') {
+      const accepted: BidAcceptedEvent = {
+        event: 'bid_accepted',
+        lot_id: lotId,
+        seq: result.seq,
+        current_price_kzt: result.priceTenge,
+      };
+      connection.send(JSON.stringify(accepted));
+      return;
+    }
+
+    const rejected: BidRejectedEvent = {
+      event: 'bid_rejected',
+      lot_id: lotId,
+      code: result.code,
+      ...(result.retryAfterMs === undefined ? {} : { retry_after_ms: result.retryAfterMs }),
+    };
+    connection.send(JSON.stringify(rejected));
   }
 
   private async onJoin(
@@ -377,6 +451,25 @@ export class WsGatewayService implements OnModuleDestroy {
     }
   }
 
+  /** Опознать браузер по httpOnly-куке рукопожатия. Кривая кука — просто гость. */
+  private userFromCookie(request: IncomingMessage): string | null {
+    const raw = request.headers.cookie;
+    if (raw === undefined) {
+      return null;
+    }
+    const token = cookieValue({ headers: { cookie: raw } } as Request, ACCESS_COOKIE);
+    if (token === null) {
+      return null;
+    }
+    try {
+      return this.tokens.verifyAccess(token).sub;
+    } catch {
+      // В отличие от join_lot с токеном, здесь молчим: кука могла просто
+      // протухнуть в открытой вкладке, и это не повод отказывать в просмотре.
+      return null;
+    }
+  }
+
   private fail(connection: Connection, code: WsErrorCode, message: string): void {
     connection.send(JSON.stringify({ event: 'error', code, message }));
   }
@@ -444,6 +537,26 @@ function toSnapshotEvent(
     server_ts: state.serverTs,
     seq: state.seq,
   };
+}
+
+/**
+ * Адрес клиента.
+ *
+ * То же правило, что в API (CLAUDE.md §4.5): доверяем ровно `hops` последним
+ * записям X-Forwarded-For. Заголовок дописывает кто угодно, включая самого
+ * клиента, а на адресе держится лимит частоты ставок.
+ */
+function clientIp(request: IncomingMessage, hops: number): string | null {
+  const direct = request.socket.remoteAddress ?? null;
+  if (hops <= 0) {
+    return direct;
+  }
+  const header = request.headers['x-forwarded-for'];
+  const chain = (Array.isArray(header) ? header.join(',') : (header ?? ''))
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  return chain[chain.length - hops] ?? direct;
 }
 
 /** Фактический порт: при port=0 ОС выбирает свободный, и знать его нужно тесту. */

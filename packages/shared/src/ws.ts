@@ -11,13 +11,28 @@
  */
 
 /** Клиент → сервер. */
-export const CLIENT_EVENTS = ['join_lot', 'leave_lot', 'pong'] as const;
+export const CLIENT_EVENTS = ['join_lot', 'leave_lot', 'place_bid', 'pong'] as const;
 export type ClientEventName = (typeof CLIENT_EVENTS)[number];
+
+/**
+ * Ставка от участника (ТЗ §2.1).
+ *
+ * Сумма — в ТЕНГЕ, ровно та, что была на кнопке. Сервер считает цену сам и
+ * сверяет с присланной: не совпало — между отрисовкой и кликом успел кто-то
+ * другой, и человек нажал не на ту цену, которую видел.
+ */
+export interface PlaceBidMessage {
+  readonly event: 'place_bid';
+  readonly lot_id: string;
+  readonly amount_kzt: number;
+}
 
 /** Сервер → клиент. */
 export const SERVER_EVENTS = [
   'state_snapshot',
   'bid_updated',
+  'bid_accepted',
+  'bid_rejected',
   'timer_tick',
   'auction_finished',
   'sla_freeze',
@@ -89,6 +104,29 @@ export interface TimerTickEvent {
   readonly server_ts: number;
   /** Номер последней принятой ставки — по нему клиент замечает пропуск. */
   readonly seq: number;
+}
+
+/**
+ * Ответ на собственную ставку — только тому, кто её сделал.
+ *
+ * Отдельно от `bid_updated`, который идёт всем: участнику нужно знать не
+ * «цена изменилась», а «моя ставка принята». Без личного ответа он видел бы
+ * только общее событие и не отличал бы свою ставку от чужой.
+ */
+export interface BidAcceptedEvent {
+  readonly event: 'bid_accepted';
+  readonly lot_id: string;
+  readonly seq: number;
+  readonly current_price_kzt: number;
+}
+
+/** Отказ по собственной ставке — тоже только автору. */
+export interface BidRejectedEvent {
+  readonly event: 'bid_rejected';
+  readonly lot_id: string;
+  readonly code: string;
+  /** Через сколько мс можно повторить. Только для RATE_LIMITED. */
+  readonly retry_after_ms?: number;
 }
 
 /** Отказ. Код машинный, message — для человека и логов. */

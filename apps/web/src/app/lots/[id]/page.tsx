@@ -3,6 +3,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
+import { AuctionHall } from '@/components/auction-hall';
 import { DepositWidget } from '@/components/deposit-widget';
 import { PhaseRatchet, phaseLabel } from '@/components/phase-ratchet';
 import { ViewBeacon } from '@/components/view-beacon';
@@ -72,6 +73,15 @@ export default async function LotPage({ params }: PageProps) {
       </header>
 
       <PriceLadder lot={lot} price={price} />
+
+      {/* Зал живёт только во время торгов: до и после смотреть в нём нечего. */}
+      {lot.status === 'PHASE_III' && (
+        <AuctionHall
+          lotId={lot.id}
+          wsUrlOverride={process.env['NEXT_PUBLIC_WS_URL']}
+          wsPort={process.env['NEXT_PUBLIC_WS_PORT'] ?? '3200'}
+        />
+      )}
 
       {/*
        * Задаток вносится на Фазе II (допуск участников) и остаётся виден в
