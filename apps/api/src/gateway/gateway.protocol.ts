@@ -53,11 +53,29 @@ const PongSchema = z
  * означал бы, что ставку можно сделать от чужого имени, подложив свой токен
  * в чужой сокет.
  */
+/**
+ * Поведенческие сигналы клика (FR-11).
+ *
+ * Необязательны: их отсутствие — не отказ, а повод показать капчу. Сырых
+ * координат здесь нет намеренно — траектория указателя это данные о человеке,
+ * а для проверки «двигался или нет» хватает агрегатов.
+ */
+const BehaviorSchema = z
+  .object({
+    trusted: z.boolean(),
+    kind: z.enum(['mouse', 'touch', 'pen', 'keyboard', 'unknown']),
+    moves: z.number().int().min(0).max(10_000),
+    path_px: z.number().int().min(0).max(1_000_000),
+    dwell_ms: z.number().int().min(0).max(600_000),
+  })
+  .strict();
+
 const PlaceBidSchema = z
   .object({
     event: z.literal('place_bid'),
     lot_id: z.string().uuid(),
     amount_kzt: z.number().int().positive(),
+    behavior: BehaviorSchema.optional(),
   })
   .strict();
 

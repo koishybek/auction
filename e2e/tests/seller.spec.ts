@@ -65,11 +65,20 @@ test.describe('T-041: кабинет продавца', () => {
             socket.onmessage = (message: MessageEvent<string>) => {
               const payload = JSON.parse(message.data) as Record<string, unknown>;
               if (payload['event'] === 'state_snapshot') {
+                // Сигналы клика обычные: проверяется запрет продавцу, а не
+                // антибот — иначе первым сработал бы он (T-049).
                 socket.send(
                   JSON.stringify({
                     event: 'place_bid',
                     lot_id: lot,
                     amount_kzt: payload['next_price_kzt'],
+                    behavior: {
+                      trusted: true,
+                      kind: 'mouse',
+                      moves: 18,
+                      path_px: 240,
+                      dwell_ms: 160,
+                    },
                   }),
                 );
               }

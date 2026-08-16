@@ -188,12 +188,20 @@ test.describe('T-039: аукционный зал', () => {
             socket.onmessage = (message: MessageEvent<string>) => {
               const payload = JSON.parse(message.data) as Record<string, unknown>;
               if (payload['event'] === 'state_snapshot') {
-                // Цена «поменьше» — классическая правка в консоли.
+                // Цена «поменьше» — классическая правка в консоли. Сигналы
+                // клика при этом обычные: правят сумму, а не поведение.
                 socket.send(
                   JSON.stringify({
                     event: 'place_bid',
                     lot_id: lot,
                     amount_kzt: Number(payload['current_price_kzt']) + 1,
+                    behavior: {
+                      trusted: true,
+                      kind: 'mouse',
+                      moves: 20,
+                      path_px: 260,
+                      dwell_ms: 180,
+                    },
                   }),
                 );
               }
@@ -215,6 +223,61 @@ test.describe('T-039: аукционный зал', () => {
       // ручки для чтения журнала наружу нет и быть не должно — журнал
       // читают из базы, а не по HTTP.
       expect(verdict['code']).toBe('PRICE_MISMATCH');
+    } finally {
+      await investor.page.context().close();
+    }
+  });
+
+  /**
+   * Поведенческий антибот (T-049, FR-11).
+   *
+   * DoD: синтетический клик получает челлендж, живой проходит. Проверяется в
+   * настоящем браузере, потому что вся разница — в событиях указателя,
+   * которых у `dispatchEvent` нет.
+   */
+  test('DoD: клик без траектории требует капчу, живой клик проходит', async ({
+    browser,
+    request,
+  }) => {
+    const { lotId } = await lotInAuction(request);
+    const investor = await investorPage(browser, request, lotId);
+
+    try {
+      await investor.page.goto(`/lots/${lotId}`);
+      const button = investor.page.getByRole('button', { name: /Сделать ставку/ });
+      await expect(button).toBeEnabled();
+
+      // Синтетический клик: событие есть, мышь не двигалась.
+      await button.dispatchEvent('click');
+      await expect(
+        investor.page.getByText('Подтвердите, что вы человек, — и ставьте дальше.'),
+      ).toBeVisible();
+
+      // Настоящий клик сессию не выручает: требование держится, пока капча не
+      // решена. Иначе автомату хватило бы одного живого клика следом.
+      await investor.page.waitForTimeout(700);
+      await button.click();
+      await expect(
+        investor.page.getByText('Подтвердите, что вы человек, — и ставьте дальше.'),
+      ).toBeVisible();
+    } finally {
+      await investor.page.context().close();
+    }
+  });
+
+  test('обычный клик мышью проходит без капчи', async ({ browser, request }) => {
+    const { lotId } = await lotInAuction(request);
+    const investor = await investorPage(browser, request, lotId);
+
+    try {
+      await investor.page.goto(`/lots/${lotId}`);
+      const button = investor.page.getByRole('button', { name: /Сделать ставку/ });
+      await expect(button).toBeEnabled();
+
+      // Обычный клик, без вымеренной траектории: именно так жмут люди, и
+      // именно на таких кликах ломался порог по числу движений.
+      await button.click();
+      await expect(investor.page.getByText('Ставка принята.')).toBeVisible();
     } finally {
       await investor.page.context().close();
     }

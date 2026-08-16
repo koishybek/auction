@@ -1,6 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from 'node:http';
 
 import type {
+  PointerKind,
   BidAcceptedEvent,
   BidRejectedEvent,
   BidUpdatedEvent,
@@ -241,7 +242,7 @@ export class WsGatewayService implements OnModuleDestroy {
       return;
     }
     if (message.event === 'place_bid') {
-      await this.onPlaceBid(connection, message.lot_id, message.amount_kzt);
+      await this.onPlaceBid(connection, message.lot_id, message.amount_kzt, message.behavior);
       return;
     }
 
@@ -263,6 +264,13 @@ export class WsGatewayService implements OnModuleDestroy {
     connection: Connection,
     lotId: string,
     amountTenge: number,
+    behavior?: {
+      trusted: boolean;
+      kind: PointerKind;
+      moves: number;
+      path_px: number;
+      dwell_ms: number;
+    },
   ): Promise<void> {
     if (connection.userId === null) {
       this.fail(connection, 'INVALID_TOKEN', 'Ставка требует входа');
@@ -282,6 +290,18 @@ export class WsGatewayService implements OnModuleDestroy {
       expectedAmountTiyn: BigInt(amountTenge) * 100n,
       sessionId: connection.id,
       ip: connection.ip,
+      // Снаружи snake_case по ТЗ, внутри — наш тип: конверсия на границе, как
+      // и с деньгами.
+      behavior:
+        behavior === undefined
+          ? null
+          : {
+              trusted: behavior.trusted,
+              kind: behavior.kind,
+              moves: behavior.moves,
+              pathPx: behavior.path_px,
+              dwellMs: behavior.dwell_ms,
+            },
     });
 
     if (result.status === 'ACCEPTED') {

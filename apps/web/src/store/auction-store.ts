@@ -1,10 +1,10 @@
 'use client';
 
 import type {
+  BehaviorSignals,
   BidUpdatedEvent,
   StateSnapshotEvent,
   TimerTickEvent,
-  PlaceBidMessage,
 } from '@auction/shared';
 import { create } from 'zustand';
 
@@ -62,7 +62,7 @@ interface AuctionStore {
    */
   readonly join: (lotId: string, wsUrl: string) => void;
   readonly leave: () => void;
-  readonly placeBid: () => void;
+  readonly placeBid: (behavior?: BehaviorSignals) => void;
 }
 
 let socket: WebSocket | null = null;
@@ -280,17 +280,32 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
      * свою и сверит: не совпало значит, что между отрисовкой и кликом успел
      * кто-то другой, и человек нажал не на ту цену, которую видел (QA-04).
      */
-    placeBid: (): void => {
+    placeBid: (behavior?: BehaviorSignals): void => {
       const hall = get().hall;
       if (socket?.readyState !== WebSocket.OPEN || hall.nextPriceTenge <= 0) {
         return;
       }
-      const message: PlaceBidMessage = {
-        event: 'place_bid',
-        lot_id: hall.lotId,
-        amount_kzt: hall.nextPriceTenge,
-      };
-      socket.send(JSON.stringify(message));
+      // Поведение уходит вместе со ставкой, а не отдельным сообщением: между
+      // двумя сообщениями сервер не смог бы связать клик со ставкой, и
+      // подделать «правильное поведение» было бы проще, чем сделать его.
+      socket.send(
+        JSON.stringify({
+          event: 'place_bid',
+          lot_id: hall.lotId,
+          amount_kzt: hall.nextPriceTenge,
+          ...(behavior === undefined
+            ? {}
+            : {
+                behavior: {
+                  trusted: behavior.trusted,
+                  kind: behavior.kind,
+                  moves: behavior.moves,
+                  path_px: behavior.pathPx,
+                  dwell_ms: behavior.dwellMs,
+                },
+              }),
+        }),
+      );
     },
   };
 });

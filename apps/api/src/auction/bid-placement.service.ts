@@ -1,6 +1,7 @@
-import type { BidDenyCode, BidRejectCode } from '@auction/shared';
+import type { BehaviorSignals, BidDenyCode, BidRejectCode } from '@auction/shared';
 import { Injectable, Logger } from '@nestjs/common';
 
+import { AntibotService } from '../antibot/antibot.service';
 import { DepositsService } from '../deposits/deposits.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -42,6 +43,7 @@ export class BidPlacementService {
     private readonly rateLimit: BidRateLimitService,
     private readonly deposits: DepositsService,
     private readonly bidAudit: BidAuditService,
+    private readonly antibot: AntibotService,
   ) {}
 
   /**
@@ -58,6 +60,8 @@ export class BidPlacementService {
     /** Сессия входа и адрес — по ним считается частота (FR-10). */
     sessionId?: string;
     ip?: string | null;
+    /** Сигналы клика для поведенческой проверки (FR-11). */
+    behavior?: BehaviorSignals | null;
   }): Promise<PlacementResult> {
     /**
      * Лимит частоты стоит первым — до похода в базу за правами.
@@ -73,6 +77,23 @@ export class BidPlacementService {
       });
       if (!rate.allowed) {
         return { status: 'REJECTED', code: 'RATE_LIMITED', retryAfterMs: rate.retryAfterMs };
+      }
+
+      /**
+       * Поведение клика (FR-11). После лимита частоты и до похода в базу:
+       * проверка стоит одного запроса в Redis, а отсеивает автомат раньше,
+       * чем тот займёт PostgreSQL.
+       *
+       * Санкция мягкая: не запрет, а требование доказать, что ты человек.
+       */
+      if (
+        await this.antibot.shouldChallenge({
+          sessionId: input.sessionId,
+          lotId: input.lotId,
+          signals: input.behavior ?? null,
+        })
+      ) {
+        return { status: 'REJECTED', code: 'CAPTCHA_REQUIRED' };
       }
     }
 

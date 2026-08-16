@@ -1,6 +1,8 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+import { BehaviorTracker } from '@/lib/behavior-tracker';
 
 import { FinishModal, FreezeBanner, RunnerUpModal } from '@/components/auction-modals';
 import {
@@ -39,6 +41,7 @@ const REJECT_TEXT: Readonly<Record<string, string>> = {
   SELLER_OWN_LOT: 'Продавец не участвует в торгах по своему лоту.',
   USER_BLOCKED: 'Доступ к торгам закрыт.',
   RATE_LIMITED: 'Слишком часто. Не больше одной ставки в полсекунды.',
+  CAPTCHA_REQUIRED: 'Подтвердите, что вы человек, — и ставьте дальше.',
   TIMER_EXPIRED: 'Торги закрылись раньше, чем дошла ставка.',
   NOT_RUNNING: 'По этому лоту торги не идут.',
   INVALID_TOKEN: 'Войдите, чтобы участвовать в торгах.',
@@ -73,6 +76,13 @@ export function AuctionHall({
   // Право ставить решает сервер — спрашиваем его, а не догадываемся. Спрятанная
   // кнопка ничего не разрешает и ничего не запрещает: отказ всё равно приходит
   // с сервера, но предлагать то, что будет отклонено, незачем (FR-16).
+  /**
+   * Сборщик поведения живёт весь срок жизни зала (FR-11).
+   *
+   * Движения указателя копятся до клика — после него сервер уже ничего
+   * спросить не может.
+   */
+  const behavior = useRef(new BehaviorTracker());
   const [deny, setDeny] = useState<string | null>(null);
   useEffect(() => {
     void fetch(`/api/lots/${lotId}/auction/eligibility`, {
@@ -152,7 +162,27 @@ export function AuctionHall({
             <>
               <button
                 type="button"
-                onClick={placeBid}
+                onPointerMove={(event) =>
+                  behavior.current.track({
+                    pointerType: event.pointerType,
+                    clientX: event.clientX,
+                    clientY: event.clientY,
+                  })
+                }
+                onPointerEnter={() => behavior.current.enter()}
+                onPointerLeave={() => behavior.current.leave()}
+                onKeyDown={(event) => {
+                  // Клавиатурная активация помечается явно: человек без мыши
+                  // участвует наравне со всеми (FR-11).
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    behavior.current.keyboard();
+                  }
+                }}
+                onClick={(event) => {
+                  // isTrusted различает живой клик и dispatchEvent из консоли.
+                  placeBid(behavior.current.snapshot(event.nativeEvent.isTrusted));
+                  behavior.current.reset();
+                }}
                 disabled={!enabled}
                 className="deposit-action mt-8 w-full py-4 text-sm"
               >
