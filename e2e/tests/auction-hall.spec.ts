@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { API_URL } from '../stack';
+
 import { investorPage, lotInAuction } from './arena';
 
 /**
@@ -89,6 +91,10 @@ test.describe('T-039: аукционный зал', () => {
       const timer = investor.page.getByText(/^\d{2}\.\d{3}$/);
       await expect(timer).toBeVisible();
 
+      // Первый отсчёт появляется со снимком: до него на табло нули, и
+      // сравнивать «было — стало» бессмысленно.
+      await expect(timer).not.toHaveText('00.000', { timeout: 15_000 });
+
       const firstText = (await timer.textContent()) ?? '0';
       const first = Number(firstText.split('.')[0]);
       await investor.page.waitForTimeout(2_500);
@@ -100,6 +106,60 @@ test.describe('T-039: аукционный зал', () => {
       expect(first).toBeLessThanOrEqual(50);
     } finally {
       await investor.page.context().close();
+    }
+  });
+
+  /**
+   * Ресинк после возвращения (T-030, QA-03).
+   *
+   * Возвращение делается перезагрузкой вкладки, а не `setOffline`: режим
+   * «офлайн» в Chromium блокирует новые запросы, но уже открытый сокет
+   * продолжает получать кадры — обрыв им не изобразить, а тест, который
+   * «проверяет» несуществующий обрыв, хуже отсутствующего. Сам обрыв на
+   * десять секунд проверяется серверным e2e; здесь важно другое — что
+   * вернувшийся участник видит состояние на СЕЙЧАС, а не то, что было.
+   */
+  test('T-030: вернувшийся клиент видит состояние на сейчас', async ({ browser, request }) => {
+    const { lotId } = await lotInAuction(request);
+    const watcher = await investorPage(browser, request, lotId);
+    const bidder = await investorPage(browser, request, lotId);
+
+    try {
+      await watcher.page.goto(`/lots/${lotId}`);
+      await bidder.page.goto(`/lots/${lotId}`);
+      await expect(watcher.page.getByRole('button', { name: /Сделать ставку/ })).toBeEnabled();
+
+      // Пока наблюдатель «отсутствует», цена уходит вперёд двумя ставками.
+      const bidButton = bidder.page.getByRole('button', { name: /Сделать ставку/ });
+      await expect(bidButton).toBeEnabled();
+      await bidButton.click();
+      await expect(bidder.page.getByText('Ставка принята.')).toBeVisible();
+
+      // Хвост ленты в снимке приходит из PostgreSQL, а ставки доезжают туда
+      // отдельным процессом. Ждём именно этого, а не «немного»: иначе тест
+      // проверял бы скорость воркера, а не ресинк.
+      await expect
+        .poll(
+          async () => {
+            const feed = await request.get(`${API_URL}/api/lots/${lotId}/auction/bids`);
+            return ((await feed.json()) as unknown[]).length;
+          },
+          { timeout: 10_000 },
+        )
+        .toBeGreaterThan(0);
+
+      await watcher.page.reload();
+      const watcherButton = watcher.page.getByRole('button', { name: /Сделать ставку/ });
+      await expect(watcherButton).toBeEnabled();
+
+      // Снимок затирает представление целиком: догонять по кусочкам нечего.
+      expect(priceOf((await watcherButton.textContent()) ?? '')).toBe(47_740_500);
+      // Хвост ленты приезжает тем же снимком — иначе вернувшийся видел бы
+      // пустую историю и не понимал, что происходило без него.
+      await expect(watcher.page.getByRole('list').last()).toContainText(/Инвестор #\d{3,5}/);
+    } finally {
+      await watcher.page.context().close();
+      await bidder.page.context().close();
     }
   });
 

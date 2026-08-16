@@ -27,6 +27,20 @@ import {
 /** Задержки переподключения. Растут, чтобы не добивать сервер, который лежит. */
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
 
+/**
+ * Сколько терпим тишину в сокете, прежде чем считать связь оборванной.
+ *
+ * Сервер шлёт ping раз в 2 с и тик таймера раз в 1 с (ТЗ §2.1–2.2), поэтому
+ * восемь секунд молчания означают, что соединения больше нет. Ждать, пока это
+ * заметит операционная система, нельзя: оборванный сокет остаётся «открытым»
+ * для браузера сколь угодно долго, и участник смотрит на замерший таймер,
+ * считая, что видит торги. Проверено обрывом связи в браузере.
+ */
+const SILENCE_LIMIT_MS = 8_000;
+
+/** Как часто сторож проверяет тишину. */
+const WATCHDOG_MS = 2_000;
+
 export type ConnectionState = 'offline' | 'connecting' | 'online';
 
 /** Отказ по собственной ставке — его видит только автор. */
@@ -40,6 +54,8 @@ interface AuctionStore {
   readonly hall: HallState;
   readonly connection: ConnectionState;
   readonly feedback: BidFeedback | null;
+  /** Через сколько сервер обещает снять паузу SLA Freeze. `null` — паузы нет. */
+  readonly resumeInMs: number | null;
   /**
    * Действия объявлены свойствами-функциями, а не методами: метод, вырванный
    * из объекта (а селектор стора делает ровно это), теряет свой `this`.
@@ -51,6 +67,8 @@ interface AuctionStore {
 
 let socket: WebSocket | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let lastMessageAt = 0;
 let attempt = 0;
 let currentLot: string | null = null;
 let currentUrl: string | null = null;
@@ -102,15 +120,34 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
           winnerBlindId: finished.winner_blind_id ?? null,
           currentPriceTenge: finished.final_price_kzt ?? get().hall.currentPriceTenge,
         },
+        resumeInMs: null,
       });
       return;
     }
     if (event === 'sla_freeze') {
-      set({ hall: { ...get().hall, status: 'FROZEN' } });
+      const freeze = raw as { time_remaining_ms?: number; resume_in_ms?: number };
+      set({
+        hall: {
+          ...get().hall,
+          status: 'FROZEN',
+          // Остаток замирает на снимке: после паузы участник получит ровно то
+          // время, что у него было, а не «сколько осталось по календарю».
+          timeRemainingMs: freeze.time_remaining_ms ?? get().hall.timeRemainingMs,
+        },
+        resumeInMs: freeze.resume_in_ms ?? null,
+      });
       return;
     }
     if (event === 'sla_resume') {
-      set({ hall: { ...get().hall, status: 'RUNNING' } });
+      const resume = raw as { time_remaining_ms?: number };
+      set({
+        hall: {
+          ...get().hall,
+          status: 'RUNNING',
+          timeRemainingMs: resume.time_remaining_ms ?? get().hall.timeRemainingMs,
+        },
+        resumeInMs: null,
+      });
       resync();
       return;
     }
@@ -144,10 +181,12 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
 
     next.onopen = () => {
       attempt = 0;
+      lastMessageAt = performance.now();
       // Токена в сообщении нет: браузер предъявляется кукой при рукопожатии.
       next.send(JSON.stringify({ event: 'join_lot', lot_id: currentLot }));
     };
     next.onmessage = (message: MessageEvent<string>) => {
+      lastMessageAt = performance.now();
       try {
         handle(JSON.parse(message.data));
       } catch {
@@ -167,6 +206,27 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
     };
   }
 
+  /**
+   * Сторож тишины.
+   *
+   * Оборванный сокет остаётся «открытым» для браузера сколько угодно долго —
+   * ни `close`, ни `error` не приходят. Без этой проверки участник смотрел бы
+   * на замерший таймер, считая, что видит торги.
+   */
+  function startWatchdog(): void {
+    if (watchdogTimer !== null) {
+      return;
+    }
+    watchdogTimer = setInterval(() => {
+      if (socket === null || currentLot === null) {
+        return;
+      }
+      if (performance.now() - lastMessageAt > SILENCE_LIMIT_MS) {
+        socket.close();
+      }
+    }, WATCHDOG_MS);
+  }
+
   function scheduleReconnect(): void {
     if (currentLot === null || reconnectTimer !== null) {
       return;
@@ -183,6 +243,7 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
     hall: initialHall(''),
     connection: 'offline',
     feedback: null,
+    resumeInMs: null,
 
     join: (lotId: string, wsUrl: string): void => {
       if (currentLot === lotId && socket !== null) {
@@ -193,6 +254,7 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
       attempt = 0;
       set({ hall: initialHall(lotId), feedback: null });
       open();
+      startWatchdog();
     },
 
     leave: (): void => {
@@ -201,6 +263,10 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
       if (reconnectTimer !== null) {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
+      }
+      if (watchdogTimer !== null) {
+        clearInterval(watchdogTimer);
+        watchdogTimer = null;
       }
       socket?.close();
       socket = null;

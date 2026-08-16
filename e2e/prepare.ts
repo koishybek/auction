@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 
+import Redis from 'ioredis';
 import { Client } from 'pg';
 
 import { repoRoot, stackEnv, TEST_DB_NAME, testDatabaseUrl } from './stack';
@@ -40,6 +41,8 @@ async function prepare(): Promise<void> {
     await admin.end();
   }
 
+  await clearRedisNamespace();
+
   execFileSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
     cwd: apiDir,
     stdio: 'pipe',
@@ -58,6 +61,40 @@ async function prepare(): Promise<void> {
     env: { ...process.env, ...stackEnv(), NODE_ENV: 'production' },
   });
   console.log(`[e2e] стенд собран, база ${TEST_DB_NAME} готова`);
+}
+
+/**
+ * Снести ключи стенда в Redis.
+ *
+ * Не косметика. База между прогонами пересоздаётся, а поток ставок в Redis —
+ * нет, и запись о ставке по уже несуществующему лоту роняет запись пачки на
+ * внешнем ключе. Пачка повторяется бесконечно, и вместе с ней встаёт весь
+ * перенос ставок: новые ставки не доезжают в базу вообще. Выглядит это как
+ * «лента пустая», а причина — в прошлом прогоне.
+ *
+ * FLUSHDB запрещён (CLAUDE.md): в том же инстансе живут ключи разработчика.
+ */
+async function clearRedisNamespace(): Promise<void> {
+  const namespace = stackEnv()['REDIS_NAMESPACE'] ?? '';
+  const client = new Redis(process.env['REDIS_URL'] ?? 'redis://127.0.0.1:6379', {
+    maxRetriesPerRequest: 3,
+  });
+  try {
+    let cursor = '0';
+    let removed = 0;
+    do {
+      const [next, keys] = await client.scan(cursor, 'MATCH', `${namespace}:*`, 'COUNT', 500);
+      cursor = next;
+      if (keys.length > 0) {
+        removed += await client.del(...keys);
+      }
+    } while (cursor !== '0');
+    if (removed > 0) {
+      console.log(`[e2e] очищено ключей Redis: ${String(removed)}`);
+    }
+  } finally {
+    client.disconnect();
+  }
 }
 
 // Не top-level await: пакет собирается как CommonJS, и такой await не

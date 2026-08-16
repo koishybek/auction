@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 
+import { FinishModal, FreezeBanner, RunnerUpModal } from '@/components/auction-modals';
 import {
   bidLabel,
   canBid,
@@ -55,6 +56,7 @@ export function AuctionHall({
   const hall = useAuctionStore((store) => store.hall);
   const connection = useAuctionStore((store) => store.connection);
   const feedback = useAuctionStore((store) => store.feedback);
+  const resumeInMs = useAuctionStore((store) => store.resumeInMs);
   const join = useAuctionStore((store) => store.join);
   const leave = useAuctionStore((store) => store.leave);
   const placeBid = useAuctionStore((store) => store.placeBid);
@@ -80,6 +82,21 @@ export function AuctionHall({
         </h2>
         <ConnectionBadge state={connection} />
       </div>
+
+      {/* Пауза — баннер, а не модалка: торги не закончились, и закрывать
+          экран нельзя — участник должен видеть цену и замерший таймер. */}
+      {hall.status === 'FROZEN' && resumeInMs !== null && <FreezeBanner resumeInMs={resumeInMs} />}
+
+      {hall.status === 'FINISHED' && (
+        <>
+          <FinishModal
+            winnerBlindId={hall.winnerBlindId}
+            finalPriceTenge={hall.currentPriceTenge}
+          />
+          {/* Выбор предложен ровно одному человеку — окно само решит, ему ли. */}
+          <RunnerUpModal lotId={lotId} />
+        </>
+      )}
 
       <div className="grid gap-10 border-t border-[var(--color-rule)] pt-10 lg:grid-cols-[1fr_1fr]">
         <div>

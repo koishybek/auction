@@ -13,6 +13,7 @@
     "dev": "pnpm -r --parallel run dev",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
+    "test:browser": "pnpm --filter @auction/e2e test:browser",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

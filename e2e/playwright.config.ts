@@ -14,6 +14,10 @@ import { API_PORT, API_URL, GATEWAY_PORT, stackEnv, WEB_PORT, WEB_URL } from './
  */
 export default defineConfig({
   testDir: './tests',
+  // Воркер поднимается здесь, а не в webServer: у него нет HTTP-порта, а
+  // webServer умеет ждать только адрес. Без воркера торги не закрываются.
+  globalSetup: './worker-process.ts',
+  globalTeardown: './global-teardown.ts',
   fullyParallel: false,
   workers: 1,
   timeout: 90_000,

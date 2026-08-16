@@ -4,9 +4,9 @@
   "private": true,
   "description": "Сквозные тесты приёмки в настоящем браузере (Playwright)",
   "scripts": {
-    "pretest": "tsx prepare.ts",
-    "test": "playwright test",
-    "test:headed": "playwright test --headed",
+    "pretest:browser": "tsx prepare.ts",
+    "test:browser": "playwright test",
+    "test:browser:headed": "playwright test --headed",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "install:browser": "playwright install chromium"
   },
@@ -15,6 +15,7 @@
     "@playwright/test": "^1.57.0",
     "@types/node": "^26.2.0",
     "@types/pg": "^8.15.6",
+    "ioredis": "^5.9.1",
     "pg": "^8.16.4",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
