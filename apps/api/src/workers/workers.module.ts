@@ -8,6 +8,7 @@ import { RegistryModule } from '../integrations/registry/registry.module';
 import { LotsModule } from '../lots/lots.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { PartnersModule } from '../partners/partners.module';
+import { PaymentsModule } from '../payments/payments.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
@@ -15,6 +16,7 @@ import { BidPersistWorker } from './bid-persist.worker';
 import { FinisherWorker } from './finisher.worker';
 import { LeadExpiryWorker } from './lead-expiry.worker';
 import { ProtocolWorker } from './protocol.worker';
+import { RefBonusPayoutWorker } from './ref-bonus-payout.worker';
 import { RefundWorker } from './refund.worker';
 import { RegistryRecheckService } from './registry-recheck.service';
 import { RegistryRecheckWorker } from './registry-recheck.worker';
@@ -44,6 +46,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     DepositsModule,
     PartnersModule,
     DocumentsModule,
+    PaymentsModule,
   ],
   providers: [
     RegistryRecheckService,
@@ -53,6 +56,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     RefundWorker,
     LeadExpiryWorker,
     ProtocolWorker,
+    RefBonusPayoutWorker,
   ],
   exports: [
     RegistryRecheckService,
@@ -62,6 +66,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     RefundWorker,
     LeadExpiryWorker,
     ProtocolWorker,
+    RefBonusPayoutWorker,
   ],
 })
 export class WorkersModule {}

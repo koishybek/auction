@@ -34,6 +34,7 @@ export class BankMockProvider implements BankProvider {
   private readonly splits: SplitRequest[] = [];
   private failNext = false;
   private failRefund = false;
+  private failSplit = false;
 
   createInvoice(request: InvoiceRequest): Promise<InvoiceResult> {
     this.invoices.push(request);
@@ -59,6 +60,11 @@ export class BankMockProvider implements BankProvider {
   }
 
   split(request: SplitRequest): Promise<SplitResult> {
+    if (this.failSplit) {
+      // Отказ до записи: непринятое поручение — это поручение, которого не было.
+      this.failSplit = false;
+      return Promise.reject(new Error('Банк отклонил расщепление'));
+    }
     this.splits.push(request);
     return Promise.resolve({
       splitId: `split-${randomUUID()}`,
@@ -97,6 +103,11 @@ export class BankMockProvider implements BankProvider {
     this.failRefund = true;
   }
 
+  /** Следующее расщепление банк отклонит. */
+  failSplitOnce(): void {
+    this.failSplit = true;
+  }
+
   invoicesSent(): readonly InvoiceRequest[] {
     return this.invoices;
   }
@@ -120,5 +131,6 @@ export class BankMockProvider implements BankProvider {
     this.splits.length = 0;
     this.failNext = false;
     this.failRefund = false;
+    this.failSplit = false;
   }
 }
