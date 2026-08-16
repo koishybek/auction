@@ -34,6 +34,15 @@ export class TokenService {
     this.refreshTtlMs = parseDuration(config.get('JWT_REFRESH_TTL', { infer: true }));
   }
 
+  /** Сроки жизни наружу — их же получают куки сессии, чтобы не разойтись с токеном. */
+  get accessTtlMs(): number {
+    return this.accessTtlSeconds * 1000;
+  }
+
+  get refreshTtl(): number {
+    return this.refreshTtlMs;
+  }
+
   /**
    * expiresIn задаём числом секунд, а не строкой «15m».
    *

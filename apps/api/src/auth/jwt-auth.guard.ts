@@ -13,6 +13,7 @@ import { TimeService } from '../time/time.service';
 
 import { AUTH_ERROR, type AuthenticatedUser } from './auth.types';
 import { IS_PUBLIC_KEY } from './decorators';
+import { ACCESS_COOKIE, cookieValue } from './session-cookies';
 import { TokenService } from './token.service';
 
 /**
@@ -41,7 +42,7 @@ export class JwtAuthGuard implements CanActivate {
       context.getClass(),
     ]);
     const request = context.switchToHttp().getRequest<Request & { user?: AuthenticatedUser }>();
-    const token = extractBearer(request.headers.authorization);
+    const token = extractToken(request);
 
     if (isPublic === true) {
       // Публичная ручка, но токен прислали — распознаём пользователя по мере сил.
@@ -117,6 +118,17 @@ export class JwtAuthGuard implements CanActivate {
       // Кривой токен на публичной ручке — не ошибка.
     }
   }
+}
+
+/**
+ * Откуда берётся токен: заголовок, затем кука.
+ *
+ * Заголовок первым намеренно. Клиент, приславший `Authorization`, действует
+ * осознанно, и если этот токен негоден, ответ должен быть про него — иначе
+ * запрос молча пройдёт под чужой сессией из куки, оставшейся в браузере.
+ */
+function extractToken(request: Request): string | null {
+  return extractBearer(request.headers.authorization) ?? cookieValue(request, ACCESS_COOKIE);
 }
 
 function extractBearer(header: string | undefined): string | null {

@@ -281,6 +281,82 @@ describe('блокировка пользователя', () => {
   });
 });
 
+describe('cookie-сессия для браузера', () => {
+  /** Все Set-Cookie ответа одной строкой — заголовок повторяется. */
+  function cookiesOf(response: { headers: Record<string, unknown> }): string {
+    const raw: unknown = response.headers['set-cookie'];
+    if (Array.isArray(raw)) {
+      return (raw as unknown[]).map((line) => String(line)).join('\n');
+    }
+    return typeof raw === 'string' ? raw : '';
+  }
+
+  it('вход кладёт токены в httpOnly-куки', async () => {
+    const response = await api()
+      .post('/api/auth/dev-login')
+      .send({ roles: ['INVESTOR'] })
+      .expect(200);
+
+    const cookies = cookiesOf(response);
+    expect(cookies).toContain('auction_at=');
+    expect(cookies).toContain('auction_rt=');
+    // httpOnly — токен недоступен скриптам; SameSite=Strict закрывает CSRF,
+    // который кука иначе приносит с собой.
+    expect(cookies).toContain('HttpOnly');
+    expect(cookies).toContain('SameSite=Strict');
+    // Refresh не ездит с каждым запросом за каталогом.
+    expect(cookies).toContain('Path=/api/auth');
+  });
+
+  it('куки хватает вместо заголовка Authorization', async () => {
+    const agent = request.agent(app.getHttpServer() as Parameters<typeof request>[0]);
+    await agent
+      .post('/api/auth/dev-login')
+      .send({ roles: ['INVESTOR'] })
+      .expect(200);
+
+    // Ни одного токена в коде клиента — только кука, выданная сервером.
+    const me = await agent.get('/api/auth/me').expect(200);
+    expect((me.body as { id: string }).id).toBeDefined();
+  });
+
+  it('обновление работает по куке, без тела запроса', async () => {
+    const agent = request.agent(app.getHttpServer() as Parameters<typeof request>[0]);
+    await agent
+      .post('/api/auth/dev-login')
+      .send({ roles: ['INVESTOR'] })
+      .expect(200);
+
+    await agent.post('/api/auth/refresh').send({}).expect(200);
+    await agent.get('/api/auth/me').expect(200);
+  });
+
+  it('выход гасит куки, а не только сессию', async () => {
+    const agent = request.agent(app.getHttpServer() as Parameters<typeof request>[0]);
+    await agent
+      .post('/api/auth/dev-login')
+      .send({ roles: ['INVESTOR'] })
+      .expect(200);
+
+    const out = await agent.post('/api/auth/logout').expect(204);
+    // Оставленная кука — это 401 на каждом переходе и вопрос «почему я не вышел».
+    expect(cookiesOf(out)).toContain('auction_at=;');
+    await agent.get('/api/auth/me').expect(401);
+  });
+
+  it('негодный заголовок не подменяется живой кукой', async () => {
+    const agent = request.agent(app.getHttpServer() as Parameters<typeof request>[0]);
+    await agent
+      .post('/api/auth/dev-login')
+      .send({ roles: ['INVESTOR'] })
+      .expect(200);
+
+    // Клиент, приславший Authorization, действует осознанно: ответ должен быть
+    // про его токен, а не молча пройти под чужой сессией из браузера.
+    await agent.get('/api/auth/me').set('Authorization', 'Bearer not-a-real-token').expect(401);
+  });
+});
+
 describe('хранение токенов', () => {
   it('refresh-токен не лежит в базе открытым текстом', async () => {
     const tokens = await login(['INVESTOR']);

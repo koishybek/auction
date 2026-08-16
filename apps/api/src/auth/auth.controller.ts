@@ -4,17 +4,36 @@ import {
   type EgovLoginResult,
   type TokenPair,
 } from '@auction/shared';
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Req,
+  Res,
+  UnauthorizedException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiOkResponse, ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
+import type { Env } from '../config/env.schema';
 import type { EgovInitResult } from '../integrations/egov/egov.types';
 
 import { AuthService } from './auth.service';
 import type { AuthenticatedUser } from './auth.types';
 import { CurrentUser, Public, Roles } from './decorators';
+import {
+  REFRESH_COOKIE,
+  clearSessionCookies,
+  cookieValue,
+  setSessionCookies,
+} from './session-cookies';
+import { TokenService } from './token.service';
 
 const DevLoginSchema = z
   .object({
@@ -24,7 +43,8 @@ const DevLoginSchema = z
 
 const RefreshSchema = z
   .object({
-    refreshToken: z.string().min(1),
+    /** Необязателен: браузер присылает refresh кукой, которой не видит сам. */
+    refreshToken: z.string().min(1).optional(),
   })
   .strict();
 
@@ -57,15 +77,42 @@ class EgovDevApproveDto extends createZodDto(EgovDevApproveSchema) {}
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly tokens: TokenService,
+    private readonly config: ConfigService<Env, true>,
+  ) {}
+
+  /**
+   * Выдать пару и заодно положить её в куки.
+   *
+   * Тело ответа сохраняется: мобильный клиент и e2e носят токен в заголовке.
+   * Браузер тот же токен получает httpOnly-кукой и в JavaScript его не видит.
+   */
+  private issue(res: Response, pair: TokenPair): TokenPair {
+    setSessionCookies(res, pair, {
+      accessTtlMs: this.tokens.accessTtlMs,
+      refreshTtlMs: this.tokens.refreshTtl,
+      secure: this.config.get('NODE_ENV', { infer: true }) === 'production',
+    });
+    return pair;
+  }
+
+  private drop(res: Response): void {
+    clearSessionCookies(res, this.config.get('NODE_ENV', { infer: true }) === 'production');
+  }
 
   /** Заглушка входа. В production ручка отвечает 404 — см. AuthService.devLogin. */
   @Public()
   @Post('dev-login')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Вход-заглушка с произвольными ролями (только вне production)' })
-  devLogin(@Body() body: DevLoginDto, @Req() req: Request): Promise<TokenPair> {
-    return this.auth.devLogin(body.roles, metaOf(req));
+  async devLogin(
+    @Body() body: DevLoginDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<TokenPair> {
+    return this.issue(res, await this.auth.devLogin(body.roles, metaOf(req)));
   }
 
   /** Шаг 1 eGov-флоу: получить QR. План задаёт этот контракт в разделе 7. */
@@ -86,8 +133,16 @@ export class AuthController {
   @Post('egov/complete')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'eGov: завершить флоу (опрашивать при PENDING)' })
-  egovComplete(@Body() body: EgovCompleteDto, @Req() req: Request): Promise<EgovLoginResult> {
-    return this.auth.egovComplete(body.sessionId, metaOf(req));
+  async egovComplete(
+    @Body() body: EgovCompleteDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<EgovLoginResult> {
+    const result = await this.auth.egovComplete(body.sessionId, metaOf(req));
+    if (result.status === 'COMPLETED') {
+      this.issue(res, result.tokens);
+    }
+    return result;
   }
 
   /**
@@ -107,22 +162,42 @@ export class AuthController {
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Обновить пару токенов (старый refresh гасится)' })
-  refresh(@Body() body: RefreshDto, @Req() req: Request): Promise<TokenPair> {
-    return this.auth.refresh(body.refreshToken, metaOf(req));
+  async refresh(
+    @Body() body: RefreshDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<TokenPair> {
+    // Браузер токена не знает — он лежит в куке, недоступной скриптам.
+    const presented = body.refreshToken ?? cookieValue(req, REFRESH_COOKIE);
+    if (presented === null) {
+      throw new UnauthorizedException({ code: 'INVALID_REFRESH_TOKEN' });
+    }
+    return this.issue(res, await this.auth.refresh(presented, metaOf(req)));
   }
 
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Выход с текущего устройства' })
-  logout(@CurrentUser() user: AuthenticatedUser): Promise<void> {
-    return this.auth.logout(user.sessionId);
+  async logout(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<void> {
+    await this.auth.logout(user.sessionId);
+    // Сессию гасим и в базе, и в браузере: оставленная кука — это ещё один
+    // запрос с 401 при каждом переходе и вопрос «почему я не вышел».
+    this.drop(res);
   }
 
   @Post('logout-everywhere')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Выход со всех устройств' })
-  async logoutEverywhere(@CurrentUser() user: AuthenticatedUser): Promise<{ revoked: number }> {
-    return { revoked: await this.auth.logoutEverywhere(user.id) };
+  async logoutEverywhere(
+    @CurrentUser() user: AuthenticatedUser,
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ revoked: number }> {
+    const revoked = await this.auth.logoutEverywhere(user.id);
+    this.drop(res);
+    return { revoked };
   }
 
   @Get('me')
