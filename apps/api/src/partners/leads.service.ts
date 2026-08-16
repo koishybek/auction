@@ -106,6 +106,35 @@ export class LeadsService {
     }
   }
 
+  /**
+   * Связать лид с появившимся лотом (FR-18 → FR-19).
+   *
+   * Без этой связи закрепление остаётся бумажкой: доля партнёра считается от
+   * победной цены ЕГО лота, и «его» определяется именно здесь. Совпадение по
+   * кадастру/VIN — единственное, что связывает приведённого собственника с
+   * выставленным объектом: партнёр лот не создаёт, его создаёт продавец.
+   *
+   * Возвращает id лида или `null`, если объект приводил никто.
+   */
+  async attachLot(cadastreOrVin: string, lotId: string): Promise<string | null> {
+    const lead = await this.prisma.partnerLead.findFirst({
+      where: { cadastreOrVin, status: 'LOCKED' },
+      select: { id: true },
+    });
+    if (lead === null) {
+      return null;
+    }
+
+    // Закрепление больше не нужно: объект дошёл до площадки, и держать его от
+    // других партнёров незачем — он уже не свободен по другой причине.
+    await this.prisma.partnerLead.updateMany({
+      where: { id: lead.id, status: 'LOCKED' },
+      data: { status: 'CONVERTED', lotId },
+    });
+    this.logger.log(`Лид ${lead.id}: объект вышел на площадку лотом ${lotId}`);
+    return lead.id;
+  }
+
   /** Лиды партнёра. Чужих здесь нет по построению выборки. */
   async list(partnerId: string): Promise<PartnerLeadsView> {
     await this.releaseExpired();

@@ -20,6 +20,7 @@ import { PiiCryptoService } from '../common/crypto/pii-crypto.service';
 import type { Lot } from '../generated/prisma/client';
 import type { LotStatus } from '../generated/prisma/enums';
 import { REGISTRY_PROVIDER, type RegistryProvider } from '../integrations/registry/registry.types';
+import { LeadsService } from '../partners/leads.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
@@ -61,6 +62,7 @@ export class LotsService {
     private readonly time: TimeService,
     private readonly pii: PiiCryptoService,
     private readonly views: LotViewsService,
+    private readonly leads: LeadsService,
     @Inject(REGISTRY_PROVIDER) private readonly registry: RegistryProvider,
   ) {}
 
@@ -79,6 +81,13 @@ export class LotsService {
         startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)),
       },
     });
+
+    // Если объект приводил партнёр, лот привязывается к его лиду: от этой
+    // связи считается его доля после торгов (FR-18 → FR-19). Партнёр лот не
+    // создаёт — создаёт продавец, и совпадение по кадастру/VIN здесь
+    // единственное, что их связывает.
+    await this.leads.attachLot(lot.cadastreOrVin, lot.id);
+
     // Пишущие ручки доступны только владельцу и админу — им цифра положена.
     return toView(lot, lot.viewsCount);
   }

@@ -1,10 +1,19 @@
 'use client';
 
-import type { PartnerLeadView, PartnerLeadsView } from '@auction/shared';
+import type {
+  PartnerLeadView,
+  PartnerLeadsView,
+  RefBonusView,
+  RefBonusesView,
+} from '@auction/shared';
 import Link from 'next/link';
 import { useCallback, useEffect, useState } from 'react';
 
 import { PhaseRatchet, phaseLabel } from '@/components/phase-ratchet';
+import { formatTenge } from '@/lib/format';
+
+/** Как часто пересчитывается прогноз. Цена растёт ставками, а не мгновенно. */
+const BONUS_REFRESH_MS = 5_000;
 
 /**
  * Лиды партнёра: форма регистрации и список закреплений.
@@ -120,8 +129,71 @@ export function PartnerLeads() {
           ))}
         </ul>
       )}
+
+      <RefBonus />
     </>
   );
+}
+
+/**
+ * Ref-Bonus: 2 % от победной цены (FR-19).
+ *
+ * Пока торги идут, это прогноз, и он обновляется опросом вместе с ценой.
+ * Считает его сервер — здесь нет ни процента, ни округления: вторая
+ * арифметика в браузере означала бы, что партнёр видит одну сумму, а получает
+ * другую.
+ */
+function RefBonus() {
+  const [items, setItems] = useState<readonly RefBonusView[] | null>(null);
+
+  useEffect(() => {
+    const load = async (): Promise<void> => {
+      const response = await fetch('/api/partner/ref-bonus', {
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { accept: 'application/json' },
+      });
+      if (response.ok) {
+        setItems(((await response.json()) as RefBonusesView).items);
+      }
+    };
+    void load();
+    const timer = setInterval(() => void load(), BONUS_REFRESH_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, []);
+
+  if (items === null || items.length === 0) {
+    return null;
+  }
+
+  return (
+    <section aria-labelledby="bonus-title" className="mt-20">
+      <h2 id="bonus-title" className="eyebrow mb-6">
+        Ref-Bonus · 2 % от победной цены
+      </h2>
+      <ul className="divide-y divide-[var(--color-rule)] border-t border-[var(--color-rule)]">
+        {items.map((bonus) => (
+          <li key={bonus.lotId} className="flex items-baseline justify-between gap-4 py-5">
+            <span className="tabular text-sm text-[var(--color-muted)]">{bonus.cadastreOrVin}</span>
+            <span className="text-right">
+              <span className="tabular block text-lg text-[var(--color-value)]">
+                {formatTenge(bonus.amountTenge)}
+              </span>
+              <span className="eyebrow">{bonusLabel(bonus.status)}</span>
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function bonusLabel(status: RefBonusView['status']): string {
+  if (status === 'FORECAST') return 'прогноз · торги идут';
+  if (status === 'ACCRUED') return 'начислено · ожидает выплаты';
+  return 'выплачено на Счёт А';
 }
 
 function LeadRow({ lead }: { lead: PartnerLeadView }) {

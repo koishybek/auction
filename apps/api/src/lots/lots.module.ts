@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { StorageModule } from '../integrations/storage/storage.module';
+import { PartnersModule } from '../partners/partners.module';
 
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
@@ -14,7 +15,7 @@ import { SellerController } from './seller.controller';
 import { SellerService } from './seller.service';
 
 @Module({
-  imports: [RegistryModule, StorageModule],
+  imports: [RegistryModule, StorageModule, PartnersModule],
   // Вложенные маршруты (/lots/:lotId/open-house, /lots/:lotId/documents) объявлены
   // раньше LotsController: они специфичнее, чем /lots/:id, и не должны
   // перехватываться как id="open-house".

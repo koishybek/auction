@@ -5,6 +5,7 @@ export * from './health';
 export * from './lots';
 export * from './money';
 export * from './partners';
+export * from './ref-bonus';
 export * from './seller';
 export * from './time';
 export * from './ws';

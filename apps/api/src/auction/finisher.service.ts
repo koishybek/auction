@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DepositsService } from '../deposits/deposits.service';
 import { RunnerUpService } from '../deposits/runner-up.service';
 import { LotsService } from '../lots/lots.service';
+import { RefBonusService } from '../partners/ref-bonus.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import type { RedisScript } from '../redis/redis-script';
@@ -114,6 +115,7 @@ export class FinisherService {
     private readonly lots: LotsService,
     private readonly deposits: DepositsService,
     private readonly runnerUp: RunnerUpService,
+    private readonly refBonus: RefBonusService,
   ) {
     this.finishScript = redis.script(FINISH_SESSION);
   }
@@ -235,6 +237,12 @@ export class FinisherService {
         winnerUserId: outcome.winnerUserId,
         runnerUpUserId: outcome.runnerUpUserId,
       });
+
+      // Доля партнёра перестала быть прогнозом: цена больше не изменится
+      // (FR-19). Без победителя делить нечего — торги не состоялись.
+      if (outcome.winnerUserId !== null) {
+        await this.refBonus.accrue(outcome.lotId, outcome.finalPriceTiyn);
+      }
     } catch (error) {
       this.logger.error(
         `Лот ${outcome.lotId}: возвраты не открыты — ` +

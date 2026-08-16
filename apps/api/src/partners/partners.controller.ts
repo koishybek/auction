@@ -1,4 +1,4 @@
-import type { PartnerLeadView, PartnerLeadsView } from '@auction/shared';
+import type { PartnerLeadView, PartnerLeadsView, RefBonusesView } from '@auction/shared';
 import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { createZodDto } from 'nestjs-zod';
@@ -8,6 +8,7 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser, RequireEgovVerified, Roles } from '../auth/decorators';
 
 import { LeadsService } from './leads.service';
+import { RefBonusService } from './ref-bonus.service';
 
 const RegisterLeadSchema = z
   .object({
@@ -32,12 +33,21 @@ class RegisterLeadDto extends createZodDto(RegisterLeadSchema) {}
 @Roles('PARTNER')
 @RequireEgovVerified()
 export class PartnersController {
-  constructor(private readonly leads: LeadsService) {}
+  constructor(
+    private readonly leads: LeadsService,
+    private readonly bonuses: RefBonusService,
+  ) {}
 
   @Get('leads')
   @ApiOperation({ summary: 'Мои лиды и сроки закрепления' })
   list(@CurrentUser() user: AuthenticatedUser): Promise<PartnerLeadsView> {
     return this.leads.list(user.id);
+  }
+
+  @Get('ref-bonus')
+  @ApiOperation({ summary: 'Мои 2 %: прогноз по идущим торгам и начисленное' })
+  refBonus(@CurrentUser() user: AuthenticatedUser): Promise<RefBonusesView> {
+    return this.bonuses.list(user.id);
   }
 
   @Post('leads')
