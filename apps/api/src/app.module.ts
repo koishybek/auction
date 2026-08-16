@@ -7,6 +7,7 @@ import { AuctionModule } from './auction/auction.module';
 import { AuthModule } from './auth/auth.module';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { CoreModule } from './core.module';
+import { DocumentsModule } from './documents/documents.module';
 import { HealthModule } from './health/health.module';
 import { LotsModule } from './lots/lots.module';
 import { PartnersModule } from './partners/partners.module';
@@ -30,6 +31,7 @@ import { UsersModule } from './users/users.module';
     LotsModule,
     AuctionModule,
     PartnersModule,
+    DocumentsModule,
     HealthModule,
   ],
 

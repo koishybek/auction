@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { AuctionModule } from '../auction/auction.module';
 import { CryptoModule } from '../common/crypto/crypto.module';
 import { DepositsModule } from '../deposits/deposits.module';
+import { DocumentsModule } from '../documents/documents.module';
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { LotsModule } from '../lots/lots.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -13,6 +14,7 @@ import { TimeModule } from '../time/time.module';
 import { BidPersistWorker } from './bid-persist.worker';
 import { FinisherWorker } from './finisher.worker';
 import { LeadExpiryWorker } from './lead-expiry.worker';
+import { ProtocolWorker } from './protocol.worker';
 import { RefundWorker } from './refund.worker';
 import { RegistryRecheckService } from './registry-recheck.service';
 import { RegistryRecheckWorker } from './registry-recheck.worker';
@@ -41,6 +43,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     NotificationsModule,
     DepositsModule,
     PartnersModule,
+    DocumentsModule,
   ],
   providers: [
     RegistryRecheckService,
@@ -49,6 +52,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     BidPersistWorker,
     RefundWorker,
     LeadExpiryWorker,
+    ProtocolWorker,
   ],
   exports: [
     RegistryRecheckService,
@@ -57,6 +61,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     BidPersistWorker,
     RefundWorker,
     LeadExpiryWorker,
+    ProtocolWorker,
   ],
 })
 export class WorkersModule {}
