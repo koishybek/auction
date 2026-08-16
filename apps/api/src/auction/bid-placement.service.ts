@@ -4,6 +4,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { DepositsService } from '../deposits/deposits.service';
 import { PrismaService } from '../prisma/prisma.service';
 
+import { BidAuditService } from './bid-audit.service';
 import { BidService, type BidOutcome } from './bid.service';
 import { BidRateLimitService } from './bid-rate-limit.service';
 import { BlindIdService } from './blind-id.service';
@@ -40,6 +41,7 @@ export class BidPlacementService {
     private readonly blindIds: BlindIdService,
     private readonly rateLimit: BidRateLimitService,
     private readonly deposits: DepositsService,
+    private readonly bidAudit: BidAuditService,
   ) {}
 
   /**
@@ -76,6 +78,7 @@ export class BidPlacementService {
 
     const denied = await this.checkEligibility(input.userId, input.lotId);
     if (denied !== null) {
+      this.audit(input, denied, null);
       // Отказ по праву — не инцидент, а штатная ветка: логируем спокойно, но
       // логируем, потому что всплеск таких отказов означает либо сломанный
       // клиент, либо перебор чужих лотов (T-049).
@@ -92,6 +95,11 @@ export class BidPlacementService {
     });
 
     if (outcome.status === 'REJECTED') {
+      // Сумму, которую сервер ждал, читаем только здесь — на пути принятой
+      // ставки этот запрос не нужен, а по отказу без неё непонятно, насколько
+      // участник промахнулся (QA-04).
+      const expected = await this.bids.nextPriceTiyn(input.lotId).catch(() => null);
+      this.audit(input, outcome.code, expected);
       return { status: 'REJECTED', code: outcome.code };
     }
     return {
@@ -99,6 +107,38 @@ export class BidPlacementService {
       seq: outcome.seq,
       priceTenge: Number(outcome.priceTiyn / 100n),
     };
+  }
+
+  /**
+   * Записать отклонённую попытку в аудит (T-048, QA-04).
+   *
+   * Без `await`: участнику ответ уже готов, и ждать записи ему незачем. Отказы
+   * по частоте не пишутся вовсе — автокликер даёт их сотнями, и запись каждого
+   * превратила бы защиту от нагрузки в способ её создать.
+   */
+  private audit(
+    input: {
+      lotId: string;
+      userId: string;
+      expectedAmountTiyn: bigint;
+      sessionId?: string;
+      ip?: string | null;
+    },
+    code: BidRejectCode,
+    serverAmountTiyn: bigint | null,
+  ): void {
+    if (!BidAuditService.isAudited(code)) {
+      return;
+    }
+    this.bidAudit.record({
+      lotId: input.lotId,
+      userId: input.userId,
+      code,
+      sentAmountTiyn: input.expectedAmountTiyn,
+      serverAmountTiyn,
+      ip: input.ip ?? null,
+      sessionId: input.sessionId ?? null,
+    });
   }
 
   /**

@@ -9,6 +9,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 import { AuctionStateService } from './auction-state.service';
 import { AdminAuctionController, AuctionController } from './auction.controller';
 import { AuctionService } from './auction.service';
+import { BidAuditService } from './bid-audit.service';
 import { BidPlacementService } from './bid-placement.service';
 import { BidOutboxService } from './bid-outbox.service';
 import { BidService } from './bid.service';
@@ -36,6 +37,7 @@ import { SlaFreezeService } from './sla-freeze.service';
     BidOutboxService,
     BlindIdService,
     BidRateLimitService,
+    BidAuditService,
     SlaFreezeService,
   ],
   exports: [

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { API_URL } from '../stack';
+import { API_URL, GATEWAY_PORT } from '../stack';
 
 import { investorPage, lotInAuction } from './arena';
 
@@ -160,6 +160,63 @@ test.describe('T-039: аукционный зал', () => {
     } finally {
       await watcher.page.context().close();
       await bidder.page.context().close();
+    }
+  });
+
+  /**
+   * QA-04, приёмочный сценарий ТЗ §6 (T-048).
+   *
+   * Ровно то, что делает злоумышленник: открывает DevTools и шлёт в сокет
+   * свою сумму вместо той, что на кнопке. Проверять это моком сервиса
+   * бессмысленно — весь смысл в том, что подмена идёт мимо интерфейса.
+   */
+  test('QA-04: подмена суммы через DevTools отклоняется сервером', async ({ browser, request }) => {
+    const { lotId } = await lotInAuction(request);
+    const investor = await investorPage(browser, request, lotId);
+
+    try {
+      await investor.page.goto(`/lots/${lotId}`);
+      await expect(investor.page.getByRole('button', { name: /Сделать ставку/ })).toBeEnabled();
+
+      const verdict = await investor.page.evaluate(
+        async ({ lot, port }) =>
+          new Promise<Record<string, unknown>>((done, fail) => {
+            const socket = new WebSocket(`ws://${window.location.hostname}:${String(port)}`);
+            socket.onopen = () => {
+              socket.send(JSON.stringify({ event: 'join_lot', lot_id: lot }));
+            };
+            socket.onmessage = (message: MessageEvent<string>) => {
+              const payload = JSON.parse(message.data) as Record<string, unknown>;
+              if (payload['event'] === 'state_snapshot') {
+                // Цена «поменьше» — классическая правка в консоли.
+                socket.send(
+                  JSON.stringify({
+                    event: 'place_bid',
+                    lot_id: lot,
+                    amount_kzt: Number(payload['current_price_kzt']) + 1,
+                  }),
+                );
+              }
+              if (payload['event'] === 'bid_rejected' || payload['event'] === 'error') {
+                socket.close();
+                done(payload);
+              }
+              if (payload['event'] === 'bid_accepted') {
+                socket.close();
+                fail(new Error('подменённая сумма принята — это дыра в деньгах'));
+              }
+            };
+            setTimeout(() => fail(new Error('сервер не ответил на подменённую ставку')), 15_000);
+          }),
+        { lot: lotId, port: GATEWAY_PORT },
+      );
+
+      // След попытки в audit_log проверяется серверным e2e (bid-audit):
+      // ручки для чтения журнала наружу нет и быть не должно — журнал
+      // читают из базы, а не по HTTP.
+      expect(verdict['code']).toBe('PRICE_MISMATCH');
+    } finally {
+      await investor.page.context().close();
     }
   });
 
