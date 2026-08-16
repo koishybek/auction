@@ -82,6 +82,18 @@ export interface BidUpdatedEvent {
   readonly lot_id: string;
   readonly current_price_kzt: number;
   readonly bid_step_kzt: number;
+  /**
+   * Сумма СЛЕДУЮЩЕЙ ставки — сверх схемы ТЗ.
+   *
+   * Без неё клиенту пришлось бы считать +3 % самому, а правило шага существует
+   * в одном экземпляре — в Lua-скрипте (CLAUDE.md §4.2). Вторая реализация
+   * означала бы, что участник видит на кнопке одну сумму, а сервер ждёт
+   * другую, и честная ставка получает отказ.
+   *
+   * Складывать цену с `bid_step_kzt` нельзя: это шаг УЖЕ сделанной ставки,
+   * посчитанный от прежней цены, а следующий шаг считается от новой.
+   */
+  readonly next_price_kzt: number;
   readonly last_bidder_blind_id: string;
   readonly time_remaining_ms: number;
   readonly timestamp: number;

@@ -281,7 +281,9 @@ describe('T-028: персист ставок и лента истории', () =
     expect(latest).toBeDefined();
     if (latest === undefined) return;
 
-    // Набор полей ровно тот, что задан ТЗ §2.1, плюс seq и session_id для ресинка.
+    // Набор полей ровно тот, что задан ТЗ §2.1, плюс seq и session_id для
+    // ресинка и next_price_kzt для кнопки: правило шага живёт на сервере, и
+    // клиент не должен считать +3 % второй реализацией (T-039).
     expect(Object.keys(latest).sort()).toEqual(
       [
         'bid_step_kzt',
@@ -289,6 +291,7 @@ describe('T-028: персист ставок и лента истории', () =
         'event',
         'last_bidder_blind_id',
         'lot_id',
+        'next_price_kzt',
         'seq',
         'session_id',
         'time_remaining_ms',
@@ -305,6 +308,9 @@ describe('T-028: персист ставок и лента истории', () =
     expect(feed.map((item) => item.current_price_kzt)).toEqual([1_092_727, 1_060_900, 1_030_000]);
     // Шаг первой ставки считается от стартовой цены лота.
     expect(feed[2]?.bid_step_kzt).toBe(30_000);
+    // Следующая цена для записи ленты — это сумма ставки, пришедшей после неё.
+    expect(feed[2]?.next_price_kzt).toBe(1_060_900);
+    expect(feed[1]?.next_price_kzt).toBe(1_092_727);
 
     // Реальных участников в ленте нет — только псевдонимы (FR-09).
     expect(JSON.stringify(feed)).not.toContain(first);

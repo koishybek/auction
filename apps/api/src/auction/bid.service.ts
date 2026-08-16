@@ -121,6 +121,10 @@ redis.call('PUBLISH', ARGV[6], cjson.encode({
   lot_id = ARGV[7],
   current_price_kzt = nextTiyn / 100,
   bid_step_kzt = (nextTiyn - tonumber(state[2])) / 100,
+  -- Сумма следующей ставки считается здесь же, единственной реализацией
+  -- правила шага. Клиент, складывающий цену с bid_step_kzt, получил бы шаг от
+  -- ПРЕЖНЕЙ цены и промахнулся бы мимо суммы, которую ждёт сервер.
+  next_price_kzt = nextPriceTiyn(nextTiyn) / 100,
   last_bidder_blind_id = ARGV[3],
   time_remaining_ms = tonumber(ARGV[4]),
   timestamp = nowMs,

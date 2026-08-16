@@ -120,9 +120,10 @@ export function applySnapshot(event: StateSnapshotEvent): HallState {
  * порядке, в котором отправлены, и откат цены назад на кнопке означал бы
  * ставку не на ту сумму.
  *
- * Следующая цена считается сервером и приходит в снимке; между снимками её
- * приходится выводить из шага, потому что bid_updated её не несёт. Величина
- * шага в событии есть — она и складывается с новой ценой.
+ * Сумма следующей ставки берётся из события как есть. Считать её здесь —
+ * складывая цену с `bid_step_kzt` — нельзя: это шаг УЖЕ сделанной ставки,
+ * посчитанный от прежней цены. Кнопка показывала бы сумму меньше той, что
+ * ждёт сервер, и честная ставка получала бы отказ (проверено браузером).
  */
 export function applyBid(state: HallState, event: BidUpdatedEvent): HallState {
   if (event.seq <= state.seq) {
@@ -133,7 +134,7 @@ export function applyBid(state: HallState, event: BidUpdatedEvent): HallState {
     status: 'RUNNING',
     currentPriceTenge: event.current_price_kzt,
     stepTenge: event.bid_step_kzt,
-    nextPriceTenge: event.current_price_kzt + event.bid_step_kzt,
+    nextPriceTenge: event.next_price_kzt,
     timeRemainingMs: event.time_remaining_ms,
     seq: event.seq,
     feed: [entryOf(event), ...state.feed].slice(0, FEED_LIMIT),

@@ -5,16 +5,19 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { createZodDto } from 'nestjs-zod';
 import { z } from 'zod';
 
 import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser, RequireEgovVerified, Roles } from '../auth/decorators';
+import type { Env } from '../config/env.schema';
 
 import { DepositPaymentsService } from './deposit-payments.service';
 import { DepositsService } from './deposits.service';
@@ -56,6 +59,7 @@ export class DepositsController {
     private readonly deposits: DepositsService,
     private readonly payments: DepositPaymentsService,
     private readonly runnerUp: RunnerUpService,
+    private readonly config: ConfigService<Env, true>,
   ) {}
 
   @Get()
@@ -87,6 +91,27 @@ export class DepositsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<DepositView> {
     return this.payments.holdCard({ lotId, userId: user.id, cardToken: body.cardToken });
+  }
+
+  /**
+   * Эмуляция оплаты счёта (только вне production).
+   *
+   * Тот же приём, что у `egov/dev-approve`: настоящего банка нет, и кто-то
+   * должен сыграть плательщика — иначе путь задатка обрывается на выставленном
+   * счёте и его нельзя ни проверить браузером, ни показать заказчику.
+   */
+  @Post('dev-pay')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Банк-мок: эмулировать оплату задатка (только вне production)' })
+  async devPay(
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<DepositView> {
+    if (this.config.get('NODE_ENV', { infer: true }) === 'production') {
+      throw new NotFoundException('Ручка недоступна');
+    }
+    await this.payments.devPay({ lotId, userId: user.id });
+    return this.deposits.view({ lotId, userId: user.id });
   }
 
   @Get('runner-up')

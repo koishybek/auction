@@ -1,6 +1,7 @@
 import type { DepositView } from '@auction/shared';
 import { Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 
+import { BankMockProvider } from '../integrations/bank/bank.mock.provider';
 import {
   BANK_PROVIDER,
   type BankProvider,
@@ -120,6 +121,31 @@ export class DepositPaymentsService {
       });
     }
     return this.deposits.view({ lotId: input.lotId, userId: input.userId });
+  }
+
+  /**
+   * Эмуляция оплаты задатка (только вне production).
+   *
+   * Существует ровно потому же, почему `egov/dev-approve`: настоящего банка
+   * нет (ОВ-3), а кто-то должен сыграть плательщика. Без неё задаток нельзя
+   * ни проверить браузером, ни показать заказчику — путь обрывается на
+   * выставленном счёте.
+   *
+   * В production ручка отвечает 404 и в этот метод не попадает.
+   */
+  async devPay(input: { lotId: string; userId: string }): Promise<WebhookOutcome> {
+    const deposit = await this.prisma.deposit.findUnique({
+      where: { userId_lotId: { userId: input.userId, lotId: input.lotId } },
+      select: { id: true, amountTiyn: true },
+    });
+    if (deposit === null) {
+      throw new NotFoundException({ code: 'DEPOSIT_NOT_FOUND' });
+    }
+    if (!(this.bank instanceof BankMockProvider)) {
+      // На реальном банке платит человек, а не мы за него.
+      throw new NotFoundException({ code: 'BANK_NOT_MOCKED' });
+    }
+    return this.handleWebhook(this.bank.emitPayment(deposit.id, deposit.amountTiyn));
   }
 
   /**

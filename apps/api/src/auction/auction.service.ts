@@ -11,6 +11,7 @@ import { LotsService } from '../lots/lots.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { AuctionStateService, type AuctionState } from './auction-state.service';
+import { BidService } from './bid.service';
 
 /**
  * Торговая сессия (T-022).
@@ -28,6 +29,9 @@ export class AuctionService {
     private readonly prisma: PrismaService,
     private readonly state: AuctionStateService,
     private readonly lots: LotsService,
+    // Ради правила шага: считать +3 % здесь значило бы завести вторую
+    // реализацию рядом с той, что принимает ставки.
+    private readonly bids: BidService,
   ) {}
 
   /**
@@ -134,16 +138,32 @@ export class AuctionService {
       take: limit,
     });
 
+    /**
+     * Сумма следующей ставки для самой свежей записи.
+     *
+     * Считается тем же Lua-скриптом, что принимает ставки, — правило шага
+     * существует в одном экземпляре (CLAUDE.md §4.2). Торги могли уже
+     * закрыться: тогда следующей ставки не существует, и поле равно текущей
+     * цене.
+     */
+    const liveNextTiyn = await this.bids.nextPriceTiyn(lotId).catch(() => null);
+
     // Шаг — разница с предыдущей ставкой. Для самой первой предыдущей нет,
     // и точкой отсчёта служит стартовая цена лота.
     return bids.map((bid, index) => {
       const previousTiyn = bids[index + 1]?.amountTiyn ?? lot.startPriceTiyn;
+      // Ставки идут от свежих к старым, поэтому «следующая» — это index - 1.
+      // Для неё ничего считать не нужно: она уже случилась и известна точно.
+      const nextTiyn = bids[index - 1]?.amountTiyn ?? liveNextTiyn ?? bid.amountTiyn;
       return {
         event: 'bid_updated' as const,
         lot_id: bid.lotId,
         session_id: bid.sessionId,
         current_price_kzt: Number(toTenge(tiyn(bid.amountTiyn))),
         bid_step_kzt: Number(toTenge(tiyn(bid.amountTiyn - previousTiyn))),
+        // Та же величина, что в живом событии: клиент не должен отличать
+        // ставку из ленты от ставки, пришедшей в реальном времени.
+        next_price_kzt: Number(toTenge(tiyn(nextTiyn))),
         last_bidder_blind_id: bid.blindCode,
         time_remaining_ms: SMART_HAMMER_TIMER_MS,
         timestamp: bid.serverTs.getTime(),

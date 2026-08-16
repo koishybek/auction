@@ -1,0 +1,22 @@
+{
+  "name": "@auction/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Сквозные тесты приёмки в настоящем браузере (Playwright)",
+  "scripts": {
+    "pretest": "tsx prepare.ts",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "install:browser": "playwright install chromium"
+  },
+  "devDependencies": {
+    "@auction/shared": "workspace:*",
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^26.2.0",
+    "@types/pg": "^8.15.6",
+    "pg": "^8.16.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

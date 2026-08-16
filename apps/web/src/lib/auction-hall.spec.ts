@@ -32,12 +32,22 @@ function snapshot(over: Partial<StateSnapshotEvent> = {}): StateSnapshotEvent {
   };
 }
 
+/**
+ * Событие ставки в том виде, в каком его шлёт сервер.
+ *
+ * `bid_step_kzt` — шаг УЖЕ сделанной ставки, посчитанный от ПРЕЖНЕЙ цены, а
+ * `next_price_kzt` — сумма следующей, посчитанная от новой. Ранний вариант
+ * этой заглушки считал шаг от новой цены, и тест подтверждал арифметику,
+ * которой сервер не делает; ошибку в итоге нашёл браузер.
+ */
 function bid(seq: number, priceTenge: number): BidUpdatedEvent {
+  const previousTenge = Math.round(priceTenge / 1.03);
   return {
     event: 'bid_updated',
     lot_id: LOT,
     current_price_kzt: priceTenge,
-    bid_step_kzt: Math.round(priceTenge * 0.03),
+    bid_step_kzt: priceTenge - previousTenge,
+    next_price_kzt: Math.round(priceTenge * 1.03),
     last_bidder_blind_id: `Инвестор #${String(700 + seq)}`,
     time_remaining_ms: 50_000,
     timestamp: 1_700_000_000_000 + seq,
@@ -117,7 +127,8 @@ describe('T-039: состояние зала', () => {
     // Ровно одно событие — и кнопка уже показывает новую цену: пересчёта по
     // отдельному запросу нет, иначе между ставкой и кнопкой был бы разрыв.
     expect(state.currentPriceTenge).toBe(1_030_000);
-    expect(state.nextPriceTenge).toBe(1_030_000 + Math.round(1_030_000 * 0.03));
+    // Сумма следующей ставки взята из события, а не сложена из цены и шага.
+    expect(state.nextPriceTenge).toBe(Math.round(1_030_000 * 1.03));
     expect(state.seq).toBe(1);
     expect(state.feed[0]?.blindId).toBe('Инвестор #701');
   });
