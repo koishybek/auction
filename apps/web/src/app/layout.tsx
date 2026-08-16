@@ -75,6 +75,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 Кабинет продавца
               </Link>
               <Link
+                href="/partner"
+                className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-paper)]"
+              >
+                Кабинет партнёра
+              </Link>
+              <Link
                 href="/login"
                 className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-paper)]"
               >

@@ -6,11 +6,13 @@ import { DepositsModule } from '../deposits/deposits.module';
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { LotsModule } from '../lots/lots.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { PartnersModule } from '../partners/partners.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
 import { BidPersistWorker } from './bid-persist.worker';
 import { FinisherWorker } from './finisher.worker';
+import { LeadExpiryWorker } from './lead-expiry.worker';
 import { RefundWorker } from './refund.worker';
 import { RegistryRecheckService } from './registry-recheck.service';
 import { RegistryRecheckWorker } from './registry-recheck.worker';
@@ -38,6 +40,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     AuctionModule,
     NotificationsModule,
     DepositsModule,
+    PartnersModule,
   ],
   providers: [
     RegistryRecheckService,
@@ -45,6 +48,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     FinisherWorker,
     BidPersistWorker,
     RefundWorker,
+    LeadExpiryWorker,
   ],
   exports: [
     RegistryRecheckService,
@@ -52,6 +56,7 @@ import { RegistryRecheckWorker } from './registry-recheck.worker';
     FinisherWorker,
     BidPersistWorker,
     RefundWorker,
+    LeadExpiryWorker,
   ],
 })
 export class WorkersModule {}

@@ -9,6 +9,7 @@ import { CryptoModule } from './common/crypto/crypto.module';
 import { CoreModule } from './core.module';
 import { HealthModule } from './health/health.module';
 import { LotsModule } from './lots/lots.module';
+import { PartnersModule } from './partners/partners.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { TimeModule } from './time/time.module';
@@ -28,6 +29,7 @@ import { UsersModule } from './users/users.module';
     AdminModule,
     LotsModule,
     AuctionModule,
+    PartnersModule,
     HealthModule,
   ],
 
