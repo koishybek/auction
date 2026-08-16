@@ -1,4 +1,4 @@
-import type { AuctionStateView, BidUpdatedEvent } from '@auction/shared';
+import type { AuctionStateView, BidDenyCode, BidUpdatedEvent } from '@auction/shared';
 import {
   Controller,
   Get,
@@ -17,6 +17,7 @@ import type { AuthenticatedUser } from '../auth/auth.types';
 import { CurrentUser, Public, Roles } from '../auth/decorators';
 
 import { AuctionService } from './auction.service';
+import { BidPlacementService } from './bid-placement.service';
 
 /** Сколько последних ставок отдавать. Потолок — чтобы лента не стала выгрузкой всей сессии. */
 const BidHistorySchema = z
@@ -28,7 +29,10 @@ class BidHistoryDto extends createZodDto(BidHistorySchema) {}
 @ApiTags('auction')
 @Controller('lots/:lotId/auction')
 export class AuctionController {
-  constructor(private readonly auction: AuctionService) {}
+  constructor(
+    private readonly auction: AuctionService,
+    private readonly placement: BidPlacementService,
+  ) {}
 
   /**
    * Снимок торгов. Публичный: цену и остаток таймера видно всем, включая
@@ -54,6 +58,24 @@ export class AuctionController {
     @Query() query: BidHistoryDto,
   ): Promise<BidUpdatedEvent[]> {
     return this.auction.history(lotId, query.limit);
+  }
+
+  /**
+   * Вправе ли я ставить по этому лоту (FR-16).
+   *
+   * Ответ даёт та же проверка, что стоит на пути ставки, — не её копия.
+   * Интерфейсу нужно знать причину заранее, чтобы не предлагать кнопку,
+   * которую сервер всё равно отклонит; но сама проверка остаётся на сервере,
+   * и спрятанная кнопка ничего не разрешает.
+   */
+  @Get('eligibility')
+  @ApiOperation({ summary: 'Могу ли я ставить по этому лоту и почему нет' })
+  async eligibility(
+    @Param('lotId', ParseUUIDPipe) lotId: string,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ allowed: boolean; code: BidDenyCode | null }> {
+    const denied = await this.placement.checkEligibility(user.id, lotId);
+    return { allowed: denied === null, code: denied };
   }
 }
 

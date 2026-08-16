@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { FinishModal, FreezeBanner, RunnerUpModal } from '@/components/auction-modals';
 import {
@@ -70,9 +70,29 @@ export function AuctionHall({
     };
   }, [lotId, wsUrlOverride, wsPort, join, leave]);
 
+  // Право ставить решает сервер — спрашиваем его, а не догадываемся. Спрятанная
+  // кнопка ничего не разрешает и ничего не запрещает: отказ всё равно приходит
+  // с сервера, но предлагать то, что будет отклонено, незачем (FR-16).
+  const [deny, setDeny] = useState<string | null>(null);
+  useEffect(() => {
+    void fetch(`/api/lots/${lotId}/auction/eligibility`, {
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          setDeny('INVALID_TOKEN');
+          return;
+        }
+        const body = (await response.json()) as { allowed: boolean; code: string | null };
+        setDeny(body.allowed ? null : (body.code ?? 'UNKNOWN'));
+      })
+      .catch(() => setDeny('UNKNOWN'));
+  }, [lotId]);
+
   const zone = timerZone(hall.timeRemainingMs);
-  // Право ставить решает сервер; здесь только состояние торгов и связь.
-  const enabled = canBid(hall, { authenticated: connection === 'online' });
+  const enabled = deny === null && canBid(hall, { authenticated: connection === 'online' });
 
   return (
     <section aria-labelledby="hall-title" className="mt-20">
@@ -138,6 +158,11 @@ export function AuctionHall({
               >
                 {bidLabel(hall)}
               </button>
+              {deny !== null && (
+                <p className="mt-4 text-xs text-[var(--color-muted)]" role="status">
+                  {REJECT_TEXT[deny] ?? 'Ставки по этому лоту вам недоступны.'}
+                </p>
+              )}
               <Feedback feedback={feedback} />
             </>
           )}

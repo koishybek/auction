@@ -13,6 +13,8 @@ import { API_URL, WEB_URL } from '../stack';
 export interface Arena {
   readonly lotId: string;
   readonly adminToken: string;
+  /** Токен владельца лота: кабинет продавца проверяется от его имени. */
+  readonly seller: string;
 }
 
 function bearer(token: string): Record<string, string> {
@@ -85,7 +87,23 @@ export async function lotInAuction(api: APIRequestContext): Promise<Arena> {
   });
   expect(started.ok(), 'торги должны стартовать').toBeTruthy();
 
-  return { lotId, adminToken };
+  return { lotId, adminToken, seller: sellerToken };
+}
+
+/** Браузер с сессией продавца. Кука — тот же транспорт, что у настоящего входа. */
+export async function sellerPage(browser: Browser, token: string): Promise<Page> {
+  const context = await browser.newContext({ baseURL: WEB_URL });
+  await context.addCookies([
+    {
+      name: 'auction_at',
+      value: token,
+      domain: '127.0.0.1',
+      path: '/',
+      httpOnly: true,
+      sameSite: 'Strict',
+    },
+  ]);
+  return context.newPage();
 }
 
 /**

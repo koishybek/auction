@@ -4,6 +4,7 @@ export * from './deposits';
 export * from './health';
 export * from './lots';
 export * from './money';
+export * from './seller';
 export * from './time';
 export * from './ws';
 

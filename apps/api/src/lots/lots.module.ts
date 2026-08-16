@@ -10,14 +10,22 @@ import { AdminLotsController, LotsController } from './lots.controller';
 import { LotsService } from './lots.service';
 import { OpenHouseController } from './open-house.controller';
 import { OpenHouseService } from './open-house.service';
+import { SellerController } from './seller.controller';
+import { SellerService } from './seller.service';
 
 @Module({
   imports: [RegistryModule, StorageModule],
   // Вложенные маршруты (/lots/:lotId/open-house, /lots/:lotId/documents) объявлены
   // раньше LotsController: они специфичнее, чем /lots/:id, и не должны
   // перехватываться как id="open-house".
-  controllers: [OpenHouseController, DocumentsController, LotsController, AdminLotsController],
-  providers: [LotsService, OpenHouseService, DocumentsService, LotViewsService],
+  controllers: [
+    OpenHouseController,
+    DocumentsController,
+    SellerController,
+    LotsController,
+    AdminLotsController,
+  ],
+  providers: [LotsService, OpenHouseService, DocumentsService, LotViewsService, SellerService],
   exports: [LotsService, LotViewsService],
 })
 export class LotsModule {}

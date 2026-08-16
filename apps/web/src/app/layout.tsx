@@ -69,6 +69,18 @@ export default function RootLayout({ children }: { children: ReactNode }) {
                 Лоты
               </Link>
               <Link
+                href="/seller"
+                className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-paper)]"
+              >
+                Кабинет продавца
+              </Link>
+              <Link
+                href="/login"
+                className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-paper)]"
+              >
+                Вход
+              </Link>
+              <Link
                 href="/status"
                 className="text-sm text-[var(--color-muted)] transition-colors hover:text-[var(--color-paper)]"
               >
