@@ -84,13 +84,13 @@ export function SellerDashboard() {
   return (
     <ul className="divide-y divide-[var(--color-rule)] border-t border-[var(--color-rule)]">
       {state.items.map((lot) => (
-        <LotRow key={lot.id} lot={lot} />
+        <LotRow key={lot.id} lot={lot} onChanged={() => void load()} />
       ))}
     </ul>
   );
 }
 
-function LotRow({ lot }: { lot: SellerLotView }) {
+function LotRow({ lot, onChanged }: { lot: SellerLotView; onChanged: () => void }) {
   const isLive = lot.status === 'PHASE_III';
   const price = lot.currentPriceTenge ?? lot.startPriceTenge;
 
@@ -123,7 +123,66 @@ function LotRow({ lot }: { lot: SellerLotView }) {
         />
         <Metric term="Ставки" value={lot.bidsCount} />
       </dl>
+
+      {lot.status === 'FINISHED' && <Decision lotId={lot.id} onChanged={onChanged} />}
     </li>
+  );
+}
+
+/**
+ * Решение продавца после торгов (FR-17).
+ *
+ * Два действия, а не переключатель: подтвердить сделку или отклонить её правом
+ * ВЕТО. Второе закрывает объект для площадки на пять месяцев, и об этом
+ * сказано прямо на кнопке — цена решения не должна выясняться после клика.
+ */
+function Decision({ lotId, onChanged }: { lotId: string; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const decide = async (path: 'confirm' | 'veto'): Promise<void> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/lots/${lotId}/${path}`, {
+        method: 'POST',
+        credentials: 'include',
+        cache: 'no-store',
+        headers: { accept: 'application/json' },
+      });
+      if (!response.ok) {
+        setError('Решение не принято — обновите страницу и попробуйте снова.');
+        return;
+      }
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-8 border-t border-[var(--color-rule)] pt-6">
+      <p className="eyebrow mb-4">Торги завершены — решение за вами</p>
+      <div className="flex flex-wrap gap-3">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide('confirm')}
+          className="deposit-action"
+        >
+          Подтвердить сделку
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void decide('veto')}
+          className="deposit-action deposit-action--ghost"
+        >
+          Право ВЕТО · карантин 5 месяцев
+        </button>
+      </div>
+      {error !== null && <p className="mt-4 text-xs text-[var(--color-alert)]">{error}</p>}
+    </div>
   );
 }
 

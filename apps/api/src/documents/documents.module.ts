@@ -5,6 +5,7 @@ import { PrismaModule } from '../prisma/prisma.module';
 
 import { ProtocolController } from './protocol.controller';
 import { ProtocolService } from './protocol.service';
+import { VetoActService } from './veto-act.service';
 
 /**
  * Документы торгов: протокол, дальше — Акт ВЕТО (T-045).
@@ -15,7 +16,7 @@ import { ProtocolService } from './protocol.service';
 @Module({
   imports: [PrismaModule, StorageModule],
   controllers: [ProtocolController],
-  providers: [ProtocolService],
-  exports: [ProtocolService],
+  providers: [ProtocolService, VetoActService],
+  exports: [ProtocolService, VetoActService],
 })
 export class DocumentsModule {}

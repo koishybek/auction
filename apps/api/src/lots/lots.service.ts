@@ -73,11 +73,30 @@ export class LotsService {
     cadastreOrVin: string;
     startPriceTenge: number;
   }): Promise<LotView> {
+    const cadastreOrVin = input.cadastreOrVin.trim().toUpperCase();
+
+    /**
+     * Цифровой Карантин: объект, по которому продавец реализовал право ВЕТО,
+     * закрыт для площадки на пять месяцев (FR-17).
+     *
+     * Проверка стоит здесь, при создании, а не при выходе в торги: смысл
+     * карантина в том, чтобы торги не превращались в бесплатную оценку —
+     * собрал цену, отказался, выставил заново. Заводить черновик, который
+     * заведомо никуда не пойдёт, тоже незачем.
+     */
+    const quarantined = await this.quarantineUntil(cadastreOrVin);
+    if (quarantined !== null) {
+      throw new ConflictException({
+        code: 'OBJECT_IN_QUARANTINE',
+        message: `Объект под Цифровым Карантином до ${quarantined.toISOString()}`,
+      });
+    }
+
     const lot = await this.prisma.lot.create({
       data: {
         sellerId: input.sellerId,
         type: input.type,
-        cadastreOrVin: input.cadastreOrVin.trim().toUpperCase(),
+        cadastreOrVin,
         startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)),
       },
     });
@@ -90,6 +109,27 @@ export class LotsService {
 
     // Пишущие ручки доступны только владельцу и админу — им цифра положена.
     return toView(lot, lot.viewsCount);
+  }
+
+  /**
+   * До какого момента объект под Цифровым Карантином. `null` — свободен.
+   *
+   * Проверяется по метке времени, а не по флагу, который снимал бы воркер.
+   * Флаг был бы вторым источником правды об одном факте: не сработал воркер —
+   * и объект остаётся закрытым после срока либо открывается раньше. Метка не
+   * может разойтись сама с собой.
+   */
+  async quarantineUntil(cadastreOrVin: string): Promise<Date | null> {
+    const vetoed = await this.prisma.lot.findFirst({
+      where: {
+        cadastreOrVin,
+        status: 'VETOED',
+        lockoutUntil: { gt: new Date(this.time.wallClockMs()) },
+      },
+      select: { lockoutUntil: true },
+      orderBy: { lockoutUntil: 'desc' },
+    });
+    return vetoed?.lockoutUntil ?? null;
   }
 
   /** Правка только собственного ЧЕРНОВИКА: после модерации параметры заморожены. */
