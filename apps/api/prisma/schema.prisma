@@ -144,6 +144,9 @@ model Lot {
   vetoDeadlineAt DateTime? @map("veto_deadline_at") @db.Timestamptz(3)
   /// Цифровой карантин после ВЕТО: до этого момента лот заново не выставить (FR-17).
   lockoutUntil   DateTime? @map("lockout_until") @db.Timestamptz(3)
+  /// Долг залогодержателю: гасится из доплаты победителя первым (INT-03).
+  /// Ноль — объект не в залоге.
+  lienDebtTiyn BigInt @default(0) @map("lien_debt_tiyn")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)

@@ -25,7 +25,7 @@ export class VetoController {
   confirm(
     @Param('lotId', ParseUUIDPipe) lotId: string,
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<{ status: 'CLOSED' }> {
+  ): Promise<{ status: 'CLOSED'; paymentId: string | null }> {
     return this.veto.confirm(lotId, user.id);
   }
 

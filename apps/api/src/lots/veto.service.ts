@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 
 import { VetoActService } from '../documents/veto-act.service';
+import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
@@ -37,14 +38,26 @@ export class VetoService {
     private readonly prisma: PrismaService,
     private readonly lots: LotsService,
     private readonly acts: VetoActService,
+    private readonly payments: PaymentsService,
     private readonly time: TimeService,
   ) {}
 
-  /** Подтвердить сделку: лот закрывается штатно. */
-  async confirm(lotId: string, sellerId: string): Promise<{ status: 'CLOSED' }> {
+  /**
+   * Подтвердить сделку: лот закрывается, победителю выставляется доплата.
+   *
+   * Доплата открывается именно здесь, а не сразу после торгов: пока продавец
+   * не подтвердил сделку, он может её отклонить правом ВЕТО, и счёт,
+   * выставленный заранее, пришлось бы отзывать (FR-17 → INT-03).
+   */
+  async confirm(
+    lotId: string,
+    sellerId: string,
+  ): Promise<{ status: 'CLOSED'; paymentId: string | null }> {
     await this.requireOwnFinishedLot(lotId, sellerId);
     await this.lots.transition({ lotId, to: 'CLOSED', actor: 'SELLER', actorId: sellerId });
-    return { status: 'CLOSED' };
+
+    const payment = await this.payments.openForWinner(lotId);
+    return { status: 'CLOSED', paymentId: payment?.paymentId ?? null };
   }
 
   /**

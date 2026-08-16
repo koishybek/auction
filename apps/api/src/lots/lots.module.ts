@@ -4,6 +4,7 @@ import { DocumentsModule } from '../documents/documents.module';
 import { RegistryModule } from '../integrations/registry/registry.module';
 import { StorageModule } from '../integrations/storage/storage.module';
 import { PartnersModule } from '../partners/partners.module';
+import { PaymentsModule } from '../payments/payments.module';
 
 import { DocumentsController } from './documents.controller';
 import { DocumentsService } from './documents.service';
@@ -18,7 +19,7 @@ import { VetoController } from './veto.controller';
 import { VetoService } from './veto.service';
 
 @Module({
-  imports: [RegistryModule, StorageModule, PartnersModule, DocumentsModule],
+  imports: [RegistryModule, StorageModule, PartnersModule, DocumentsModule, PaymentsModule],
   // Вложенные маршруты (/lots/:lotId/open-house, /lots/:lotId/documents) объявлены
   // раньше LotsController: они специфичнее, чем /lots/:id, и не должны
   // перехватываться как id="open-house".
