@@ -2,6 +2,7 @@ packages:
   - 'apps/*'
   - 'packages/*'
   - 'e2e'
+  - 'load'
 
 # pnpm 11 по умолчанию блокирует postinstall-скрипты зависимостей.
 # esbuild (внутри tsx) в postinstall распаковывает бинарник под платформу —

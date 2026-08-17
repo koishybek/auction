@@ -64,6 +64,20 @@ export default tseslint.config(
     extends: [tseslint.configs.disableTypeChecked],
   },
 
+  /**
+   * Сценарии k6 исполняются его собственным рантаймом, а не Node.
+   *
+   * `__ENV`, `__VU` и `open()` объявляет k6 — для ESLint это неизвестные
+   * имена. Гасим только их и только здесь: отключать `no-undef` шире значило
+   * бы потерять проверку опечаток в остальном коде.
+   */
+  {
+    files: ['load/**/*.js'],
+    languageOptions: {
+      globals: { __ENV: 'readonly', __VU: 'readonly', __ITER: 'readonly', open: 'readonly' },
+    },
+  },
+
   // Идёт последним: гасит правила оформления, за которое отвечает Prettier.
   prettier,
 );

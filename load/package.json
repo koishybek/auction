@@ -1,0 +1,16 @@
+{
+  "name": "@auction/load",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Нагрузочные сценарии k6: зал торгов и гонка ставок (QA-01, QA-02)",
+  "scripts": {
+    "seed": "tsx seed-lot.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@auction/e2e": "workspace:*",
+    "@types/node": "^26.2.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

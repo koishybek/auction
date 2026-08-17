@@ -51,3 +51,6 @@ tmp/
 # служебные файлы браузерного стенда
 e2e/.worker.pid
 e2e/.worker.log
+
+# сцена нагрузочного прогона (создаётся seed-lot.ts)
+load/.seed.json
