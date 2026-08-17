@@ -19,6 +19,8 @@ import { DepositPaymentsService } from '../src/deposits/deposit-payments.service
 import { GatewayModule } from '../src/gateway/gateway.module';
 import { BankMockProvider } from '../src/integrations/bank/bank.mock.provider';
 import { WsGatewayService } from '../src/gateway/ws-gateway.service';
+import { MetricsServer } from '../src/metrics/metrics.server';
+import { MetricsService } from '../src/metrics/metrics.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RealtimeModule } from '../src/realtime.module';
 import { RedisService } from '../src/redis/redis.service';
@@ -47,6 +49,59 @@ let portB = 0;
 
 function api(): ReturnType<typeof request> {
   return request(app.getHttpServer() as Parameters<typeof request>[0]);
+}
+
+/**
+ * Сумма значений метрики из текста экспозиции.
+ *
+ * Читаем именно текст, а не внутренний объект реестра: Prometheus видит этот
+ * текст, и проверять надо то, что увидит он. Метка фильтруется подстрокой —
+ * порядок меток в выводе не гарантирован ничем.
+ */
+function sumSamples(body: string, metricName: string, label?: string): number {
+  let total = 0;
+  for (const line of body.split('\n')) {
+    if (!line.startsWith(metricName)) {
+      continue;
+    }
+    // Имя должно совпасть целиком: иначе auction_bids_total поймает и
+    // auction_bids_total_something.
+    const rest = line.slice(metricName.length);
+    if (rest !== '' && !rest.startsWith('{') && !rest.startsWith(' ')) {
+      continue;
+    }
+    if (label !== undefined && !line.includes(label)) {
+      continue;
+    }
+    const value = Number(line.slice(line.lastIndexOf(' ') + 1));
+    if (Number.isFinite(value)) {
+      total += value;
+    }
+  }
+  return total;
+}
+
+interface MetricSnapshot {
+  readonly bidsAccepted: number;
+  readonly bidObservations: number;
+  readonly coreObservations: number;
+  readonly broadcasts: number;
+  readonly rttObservations: number;
+  readonly connections: number;
+  readonly largestRoom: number;
+}
+
+async function counters(metrics: MetricsService): Promise<MetricSnapshot> {
+  const { body } = await metrics.scrape();
+  return {
+    bidsAccepted: sumSamples(body, 'auction_bids_total', 'outcome="accepted"'),
+    bidObservations: sumSamples(body, 'auction_bid_duration_seconds_count'),
+    coreObservations: sumSamples(body, 'auction_bid_core_duration_seconds_count'),
+    broadcasts: sumSamples(body, 'auction_broadcast_duration_seconds_count'),
+    rttObservations: sumSamples(body, 'auction_heartbeat_rtt_seconds_count'),
+    connections: sumSamples(body, 'auction_gateway_connections'),
+    largestRoom: sumSamples(body, 'auction_gateway_room_connections_max'),
+  };
 }
 
 function auth(tokens: TokenPair): [string, string] {
@@ -770,6 +825,93 @@ describe('T-023: WS-gateway, комнаты и мост pub/sub', () => {
       first.close();
       second.close();
     }
+  });
+
+  /**
+   * Метрики приёмки (T-053, NFR-02/NFR-03).
+   *
+   * Проверяется не «метрика существует», а что она наполняется настоящей
+   * работой: ставкой по сокету, вещанием в комнату, ответом на ping. Метрика,
+   * которую никто не наполняет, на дашборде выглядит как «всё спокойно» —
+   * и это худший вид неверных данных.
+   */
+  it('DoD T-053: метрики видят ставку, вещание и качество связи', async () => {
+    const { lot } = await lotInAuction();
+    const investor = await bidder(lot.id);
+    const metrics = app.get(MetricsService);
+
+    // Значения до: файл прогоняет ставки и в других тестах, поэтому сравниваем
+    // приращение, а не абсолют.
+    const before = await counters(metrics);
+
+    const client = await connect(portA);
+    try {
+      client.send({ event: 'join_lot', lot_id: lot.id, token: investor.tokens.accessToken });
+      const snapshot = await client.waitFor('state_snapshot');
+      client.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: snapshot['next_price_kzt'] });
+      await client.waitFor('bid_accepted');
+
+      // Ждём такт heartbeat: ping идёт раз в 2 с (ТЗ §2.2), и до его ответа
+      // задержку связи никто не измерял. Тик придёт раньше — он раз в секунду.
+      await client.waitFor('timer_tick');
+      await new Promise((resolve) => setTimeout(resolve, 2_300));
+
+      const after = await counters(metrics);
+      const { body } = await metrics.scrape();
+
+      // Полный серверный путь ставки — та величина, которую приёмка сверяет с
+      // ≤15 мс (NFR-02, ОВ-2).
+      expect(after.bidsAccepted - before.bidsAccepted).toBe(1);
+      expect(after.bidObservations - before.bidObservations).toBe(1);
+      // Ядро замерено отдельно: без этого не отличить «медленный Lua» от
+      // «медленной проверки прав» (найдено на T-051).
+      expect(after.coreObservations - before.coreObservations).toBe(1);
+      // Вещание — время постановки в отправку, как его определяет ОВ-2.
+      expect(after.broadcasts - before.broadcasts).toBeGreaterThan(0);
+      // Качество связи: ответ на ping пришёл и попал в гистограмму.
+      expect(after.rttObservations - before.rttObservations).toBeGreaterThan(0);
+
+      // Размеры комнат снимаются тактом heartbeat.
+      expect(after.connections).toBeGreaterThan(0);
+      expect(after.largestRoom).toBeGreaterThan(0);
+
+      /**
+       * Бакет ровно на пороге обязателен.
+       *
+       * `histogram_quantile` интерполирует ВНУТРИ бакета, поэтому без границы
+       * на 0.015 приёмка сверяла бы p99 с приблизительным числом, а алерт
+       * срабатывал бы не там, где порог. То же с 0.005 для вещания и 2 для
+       * задержки связи (порог SLA Freeze).
+       */
+      expect(body).toContain('auction_bid_duration_seconds_bucket{le="0.015"');
+      expect(body).toContain('auction_broadcast_duration_seconds_bucket{le="0.005"');
+      expect(body).toContain('auction_heartbeat_rtt_seconds_bucket{le="2"');
+
+      // Метки лота нет ни у одной метрики: лотов десятки тысяч, и серия на
+      // каждый — это разрыв Prometheus, а не наблюдаемость.
+      expect(body).not.toContain(lot.id);
+
+      // Задержка event loop — ею объясняются спорные финиши торгов (R-5).
+      expect(body).toContain('nodejs_eventloop_lag_seconds');
+    } finally {
+      client.close();
+    }
+  });
+
+  it('метрики отдаются на своём порту, а не в /api', async () => {
+    const port = await app.get(MetricsServer).listen(0);
+
+    const scrape = await fetch(`http://127.0.0.1:${String(port)}/metrics`);
+    expect(scrape.status).toBe(200);
+    expect(scrape.headers.get('content-type')).toContain('text/plain');
+    expect(await scrape.text()).toContain('auction_bid_duration_seconds');
+
+    // Ничего, кроме /metrics, этот порт не отдаёт: он не для людей.
+    expect((await fetch(`http://127.0.0.1:${String(port)}/`)).status).toBe(404);
+
+    // Того же в API нет: ingress публикует весь /api наружу, и метрики
+    // оказались бы в интернете (T-053).
+    await api().get('/api/metrics').expect(404);
   });
 
   it('лишнее поле в ставке — отказ, а не выброшенный ключ', async () => {

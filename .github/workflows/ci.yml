@@ -64,6 +64,20 @@ jobs:
       - name: Юнит-тесты
         run: pnpm --filter @auction/api test
 
+      # Правила Prometheus проверяются здесь, а не на инциденте: алерт, который
+      # никто не проверял, — это пожелание, а не защита (T-053). Тем же файлом
+      # проверяются формулы дашборда: ошибка в PromQL глазами не видна, панель
+      # рисует правдоподобный график и молча врёт.
+      - name: Алерты и формулы дашборда
+        run: |
+          curl -sL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" \
+            | tar xz --strip-components=1 -C /usr/local/bin "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+          cd infra/observability/prometheus
+          promtool check rules auction.rules.yml
+          promtool test rules auction.rules.test.yml
+        env:
+          PROMETHEUS_VERSION: 3.13.2
+
       - name: Сборка
         run: pnpm build
 

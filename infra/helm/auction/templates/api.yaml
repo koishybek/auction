@@ -14,6 +14,12 @@ spec:
       app.kubernetes.io/component: api
   template:
     metadata:
+      annotations:
+        # Сбор метрик по аннотациям: чарт не тянет за собой CRD Prometheus
+        # Operator. Есть ServiceMonitor — используйте его, аннотации не мешают.
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: /metrics
       labels:
         {{- include "auction.labels" . | nindent 8 }}
         app.kubernetes.io/component: api
@@ -35,9 +41,13 @@ spec:
           ports:
             - name: http
               containerPort: {{ .Values.api.port }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
           env:
             - name: API_PORT
               value: {{ .Values.api.port | quote }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
             {{- range $key, $value := .Values.api.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

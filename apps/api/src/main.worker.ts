@@ -6,6 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { Logger } from 'nestjs-pino';
 
 import type { Env } from './config/env.schema';
+import { MetricsServer } from './metrics/metrics.server';
 import { WorkerModule } from './worker.module';
 
 /**
@@ -28,9 +29,13 @@ async function bootstrap(): Promise<void> {
   // воркер должен успеть закрыть очередь и вернуть незавершённое обратно.
   app.enableShutdownHooks();
 
+  // У воркера нет HTTP-слоя, но метрики есть: перенос ставок, finisher,
+  // возвраты задатков. Без своего порта они были бы невидимы (T-053).
+  const metricsPort = await app.get(MetricsServer).listen();
+
   const config = app.get(ConfigService<Env, true>);
   logger.log(
-    { env: config.get('NODE_ENV', { infer: true }) },
+    { metricsPort, env: config.get('NODE_ENV', { infer: true }) },
     'Воркер поднят: фоновые задачи запущены',
   );
 }

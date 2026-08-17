@@ -14,6 +14,19 @@ export const API_PORT = 3110;
 export const GATEWAY_PORT = 3210;
 export const WEB_PORT = 3111;
 
+/**
+ * Порты сбора метрик — по одному на процесс стенда.
+ *
+ * В Kubernetes все три процесса живут в отдельных подах и слушают ОДИН и тот же
+ * порт: единая цель для сбора проще и в конфиге, и в чартах. На одной машине это
+ * означало бы, что второй процесс не поднимется вовсе, — поэтому здесь порты
+ * разные и заданы явно. Падать на занятом порту метрик правильно: молча
+ * оставшийся без метрик процесс на дашборде выглядит как «всё спокойно».
+ */
+export const API_METRICS_PORT = 9464;
+export const GATEWAY_METRICS_PORT = 9465;
+export const WORKER_METRICS_PORT = 9466;
+
 export const API_URL = `http://127.0.0.1:${String(API_PORT)}`;
 export const WEB_URL = `http://127.0.0.1:${String(WEB_PORT)}`;
 

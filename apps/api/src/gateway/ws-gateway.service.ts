@@ -22,6 +22,7 @@ import { ACCESS_COOKIE, cookieValue } from '../auth/session-cookies';
 import { clientIpFrom } from '../common/http/client-ip';
 import { TokenService } from '../auth/token.service';
 import type { Env } from '../config/env.schema';
+import { MetricsService } from '../metrics/metrics.service';
 import { TimeService } from '../time/time.service';
 
 import { parseClientMessage } from './gateway.protocol';
@@ -117,6 +118,7 @@ export class WsGatewayService implements OnModuleDestroy {
     private readonly bidPlacement: BidPlacementService,
     private readonly tokens: TokenService,
     private readonly time: TimeService,
+    private readonly metrics: MetricsService,
     config: ConfigService<Env, true>,
   ) {
     this.defaultPort = config.get('GATEWAY_PORT', { infer: true });
@@ -235,6 +237,9 @@ export class WsGatewayService implements OnModuleDestroy {
       // есть: клиент ничего не измеряет и ничего не присылает, кроме факта.
       if (connection.pingSentAt !== null) {
         connection.rttMs = this.time.wallClockMs() - connection.pingSentAt;
+        // Та же величина уходит в метрику: по ней строится доля деградировавших
+        // клиентов, а она предсказывает SLA Freeze раньше, чем он случится.
+        this.metrics.observeHeartbeatRtt(connection.rttMs / 1000);
       }
       connection.missedPongs = 0;
       return;
@@ -421,6 +426,14 @@ export class WsGatewayService implements OnModuleDestroy {
   private sweep(): void {
     const now = this.time.wallClockMs();
     const ping = JSON.stringify({ event: 'ping', server_ts: now });
+
+    // Снимок размеров — тем же тактом, что ping. Отдельного таймера ради трёх
+    // чисел не нужно, а раз в две секунды для gauge частота более чем достаточная.
+    this.metrics.setGatewayGauges({
+      connections: this.connections.size,
+      rooms: this.rooms.roomCount(),
+      largestRoom: this.rooms.largestRoom(),
+    });
 
     for (const connection of this.connections) {
       if (connection.missedPongs >= MISSED_PONGS_BEFORE_DROP) {

@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 
 import { AntibotService } from '../antibot/antibot.service';
 import { DepositsService } from '../deposits/deposits.service';
+import { MetricsService, secondsSince } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { BidAuditService } from './bid-audit.service';
@@ -57,7 +58,41 @@ export class BidPlacementService {
     private readonly deposits: DepositsService,
     private readonly bidAudit: BidAuditService,
     private readonly antibot: AntibotService,
+    private readonly metrics: MetricsService,
   ) {}
+
+  /**
+   * Поставить от имени участника — и замерить, сколько это заняло.
+   *
+   * Замер обёрткой, а не строчками внутри: у пути ставки шесть выходов (частота,
+   * капча, права, три кода ядра), и отметить их по одному значит однажды
+   * забыть — как раз тот выход, который окажется медленным. Приёмка сверяет с
+   * ≤15 мс именно эту величину (NFR-02, ОВ-2).
+   */
+  async place(input: {
+    lotId: string;
+    userId: string;
+    expectedAmountTiyn: bigint;
+    sessionId?: string;
+    ip?: string | null;
+    behavior?: BehaviorSignals | null;
+  }): Promise<PlacementResult> {
+    const startedAt = process.hrtime.bigint();
+    try {
+      const result = await this.run(input);
+      this.metrics.observeBid({
+        seconds: secondsSince(startedAt),
+        outcome: result.status === 'ACCEPTED' ? 'accepted' : 'rejected',
+        // Метка code пустая у принятых: серии с разным набором меток пришлось бы
+        // складывать вручную в каждом запросе.
+        code: result.status === 'ACCEPTED' ? '' : result.code,
+      });
+      return result;
+    } catch (error) {
+      this.metrics.observeBid({ seconds: secondsSince(startedAt), outcome: 'error', code: '' });
+      throw error;
+    }
+  }
 
   /**
    * Поставить от имени участника.
@@ -66,7 +101,7 @@ export class BidPlacementService {
    * прислать — и участник назовётся чужим номером, а лента ставок перестанет
    * быть доказательством чего бы то ни было.
    */
-  async place(input: {
+  private async run(input: {
     lotId: string;
     userId: string;
     expectedAmountTiyn: bigint;
@@ -121,12 +156,18 @@ export class BidPlacementService {
     }
 
     const code = await this.blindIds.codeFor(input.lotId, input.userId);
+
+    // Ядро замеряется отдельно от полного пути: нагрузочный прогон T-051
+    // показал, что основной вклад дают обращения в PostgreSQL ДО него. С одной
+    // метрикой видно только «медленно», но не что оптимизировать.
+    const coreStartedAt = process.hrtime.bigint();
     const outcome: BidOutcome = await this.bids.place({
       lotId: input.lotId,
       bidderId: input.userId,
       blindCode: BlindIdService.label(code),
       expectedAmountTiyn: input.expectedAmountTiyn,
     });
+    this.metrics.observeBidCore(secondsSince(coreStartedAt));
 
     if (outcome.status === 'REJECTED') {
       // Сумму, которую сервер ждал, приносит сам отказ. Отдельным запросом её

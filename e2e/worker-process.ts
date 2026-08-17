@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { repoRoot, stackEnv } from './stack';
+import { repoRoot, stackEnv, WORKER_METRICS_PORT } from './stack';
 
 /**
  * Процесс фоновых задач для стенда.
@@ -21,7 +21,7 @@ export default function startWorker(): void {
   const log = openSync(resolve(repoRoot(), 'e2e', '.worker.log'), 'w');
   const child = spawn('node', ['dist/main.worker.js'], {
     cwd: resolve(repoRoot(), 'apps/api'),
-    env: { ...process.env, ...stackEnv() },
+    env: { ...process.env, ...stackEnv(), METRICS_PORT: String(WORKER_METRICS_PORT) },
     stdio: ['ignore', log, log],
     detached: false,
   });

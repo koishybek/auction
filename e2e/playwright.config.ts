@@ -1,6 +1,15 @@
 import { defineConfig, devices } from '@playwright/test';
 
-import { API_PORT, API_URL, GATEWAY_PORT, stackEnv, WEB_PORT, WEB_URL } from './stack';
+import {
+  API_METRICS_PORT,
+  API_PORT,
+  API_URL,
+  GATEWAY_METRICS_PORT,
+  GATEWAY_PORT,
+  stackEnv,
+  WEB_PORT,
+  WEB_URL,
+} from './stack';
 
 /**
  * Браузерная приёмка (T-039, T-040, QA-03).
@@ -39,7 +48,8 @@ export default defineConfig({
       command: 'node dist/main.js',
       cwd: '../apps/api',
       url: `${API_URL}/api/health`,
-      env: stackEnv(),
+      // Порт метрик свой у каждого процесса: на одной машине общий занят соседом.
+      env: { ...stackEnv(), METRICS_PORT: String(API_METRICS_PORT) },
       timeout: 90_000,
       reuseExistingServer: false,
       stdout: 'ignore',
@@ -49,7 +59,7 @@ export default defineConfig({
       command: 'node dist/main.gateway.js',
       cwd: '../apps/api',
       url: `http://127.0.0.1:${String(GATEWAY_PORT)}/health`,
-      env: stackEnv(),
+      env: { ...stackEnv(), METRICS_PORT: String(GATEWAY_METRICS_PORT) },
       timeout: 90_000,
       reuseExistingServer: false,
       stdout: 'ignore',

@@ -26,6 +26,12 @@ spec:
       app.kubernetes.io/component: gateway
   template:
     metadata:
+      annotations:
+        # Сбор метрик по аннотациям: чарт не тянет за собой CRD Prometheus
+        # Operator. Есть ServiceMonitor — используйте его, аннотации не мешают.
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: {{ .Values.metrics.port | quote }}
+        prometheus.io/path: /metrics
       labels:
         {{- include "auction.labels" . | nindent 8 }}
         app.kubernetes.io/component: gateway
@@ -49,9 +55,13 @@ spec:
           ports:
             - name: ws
               containerPort: {{ .Values.gateway.port }}
+            - name: metrics
+              containerPort: {{ .Values.metrics.port }}
           env:
             - name: GATEWAY_PORT
               value: {{ .Values.gateway.port | quote }}
+            - name: METRICS_PORT
+              value: {{ .Values.metrics.port | quote }}
             {{- range $key, $value := .Values.gateway.env }}
             - name: {{ $key }}
               value: {{ $value | quote }}

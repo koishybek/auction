@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { CoreModule } from './core.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { WorkersModule } from './workers/workers.module';
@@ -14,6 +15,6 @@ import { WorkersModule } from './workers/workers.module';
  * их копиями.
  */
 @Module({
-  imports: [CoreModule, PrismaModule, RedisModule, WorkersModule],
+  imports: [CoreModule, PrismaModule, RedisModule, MetricsModule, WorkersModule],
 })
 export class WorkerModule {}

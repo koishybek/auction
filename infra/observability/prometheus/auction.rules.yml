@@ -1,0 +1,178 @@
+# Правила Prometheus для платформы аукциона (T-053, NFR-02/NFR-03).
+#
+# Пороги взяты не из общих соображений, а из трактовки ОВ-2:
+#   «≤15 мс = серверное время обработки ставки; вещание ≤5 мс — время
+#    постановки в отправку».
+# Порог деградации связи (2 с) — из ТЗ §2.2, там же доля >40 %, при которой
+# торги уходят в SLA Freeze.
+#
+# Каждое правило проверяется юнит-тестом в auction.rules.test.yml:
+#   promtool test rules auction.rules.test.yml
+# Алерт, который никто не проверял, — это пожелание, а не защита.
+
+groups:
+  # ---------------------------------------------------------------------------
+  # Записывающие правила: квантили считаются один раз, а не в каждой панели.
+  #
+  # Дашборд и алерты берут одну и ту же серию — иначе на графике «всё хорошо»
+  # может сосуществовать с сработавшим алертом, и разбираться придётся не с
+  # инцидентом, а с двумя разными формулами.
+  # ---------------------------------------------------------------------------
+  - name: auction.latency.recording
+    interval: 15s
+    rules:
+      - record: auction:bid_duration_seconds:p50_5m
+        expr: histogram_quantile(0.50, sum by (le) (rate(auction_bid_duration_seconds_bucket[5m])))
+
+      - record: auction:bid_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(auction_bid_duration_seconds_bucket[5m])))
+
+      - record: auction:bid_duration_seconds:p99_5m
+        expr: histogram_quantile(0.99, sum by (le) (rate(auction_bid_duration_seconds_bucket[5m])))
+
+      # Ядро отдельно от полного пути. Нагрузочный прогон T-051 показал, что
+      # основной вклад дают обращения в PostgreSQL ДО ядра, — с одной серией
+      # видно «медленно», но не что оптимизировать.
+      - record: auction:bid_core_duration_seconds:p99_5m
+        expr: >-
+          histogram_quantile(0.99, sum by (le)
+            (rate(auction_bid_core_duration_seconds_bucket[5m])))
+
+      - record: auction:broadcast_duration_seconds:p99_5m
+        expr: >-
+          histogram_quantile(0.99, sum by (le)
+            (rate(auction_broadcast_duration_seconds_bucket[5m])))
+
+      # Доля клиентов с деградировавшей связью — та самая величина, по которой
+      # торги уходят в заморозку (FR-08). Считается как «все минус те, кто
+      # уложился в 2 с»: бакеты кумулятивны.
+      - record: auction:heartbeat:degraded_share_2m
+        expr: >-
+          1 - (
+            sum(rate(auction_heartbeat_rtt_seconds_bucket{le="2"}[2m]))
+            /
+            sum(rate(auction_heartbeat_rtt_seconds_count[2m]))
+          )
+
+  # ---------------------------------------------------------------------------
+  # Приёмочные SLA. Нарушение любого из них означает, что §6 ТЗ не проходит.
+  # ---------------------------------------------------------------------------
+  - name: auction.sla
+    rules:
+      - alert: BidLatencyAboveSla
+        expr: auction:bid_duration_seconds:p99_5m > 0.015
+        for: 2m
+        labels:
+          severity: critical
+          requirement: NFR-02
+        annotations:
+          summary: 'Серверная обработка ставки медленнее 15 мс (p99)'
+          description: >-
+            p99 обработки ставки {{ $value | humanizeDuration }} при пороге 15 мс.
+            Сначала сравните с auction:bid_core_duration_seconds:p99_5m: если ядро
+            быстрое, узкое место — проверки прав до него (три запроса в PostgreSQL).
+
+      - alert: BroadcastAboveSla
+        expr: auction:broadcast_duration_seconds:p99_5m > 0.005
+        for: 2m
+        labels:
+          severity: critical
+          requirement: NFR-02
+        annotations:
+          summary: 'Постановка события в отправку медленнее 5 мс (p99)'
+          description: >-
+            p99 вещания {{ $value | humanizeDuration }} при пороге 5 мс. Смотрите
+            размер комнаты: рассылка линейна по числу подписчиков.
+
+      - alert: RoomNearCapacity
+        # 45 000 — 90 % от требуемых NFR-03 пятидесяти тысяч на лот.
+        expr: max(auction_gateway_room_connections_max) > 45000
+        for: 1m
+        labels:
+          severity: warning
+          requirement: NFR-03
+        annotations:
+          summary: 'Комната лота подошла к проектному пределу'
+          description: >-
+            В самой большой комнате {{ $value }} соединений. Добавьте инстансы
+            gateway: комнаты живут на каждом инстансе своим составом.
+
+  # ---------------------------------------------------------------------------
+  # Отказы и деньги. Здесь важна не скорость, а то, что система цела.
+  # ---------------------------------------------------------------------------
+  - name: auction.integrity
+    rules:
+      # Исключение на пути ставки — худшее, что бывает с деньгами: участник не
+      # знает, принята его ставка или нет. Порог ноль: одна такая ставка это
+      # инцидент, а не статистика.
+      - alert: BidPathErrors
+        expr: sum(rate(auction_bids_total{outcome="error"}[5m])) > 0
+        for: 1m
+        labels:
+          severity: critical
+          requirement: FR-04
+        annotations:
+          summary: 'Ставки падают с исключением'
+          description: >-
+            {{ $value | printf "%.3f" }} ошибок/с на пути ставки. Участник в этот
+            момент не знает, принята его ставка или нет.
+
+      # Всплеск промахов по цене: либо сломанный клиент, либо попытка обойти
+      # серверный пересчёт (QA-04, T-048). Порог мягкий — это сигнал смотреть
+      # audit_log, а не останавливать торги.
+      - alert: PriceMismatchSpike
+        expr: sum(rate(auction_bids_total{code="PRICE_MISMATCH"}[5m])) > 5
+        for: 5m
+        labels:
+          severity: warning
+          requirement: QA-04
+        annotations:
+          summary: 'Много ставок с неверной суммой'
+          description: >-
+            {{ $value | printf "%.2f" }} промахов по цене в секунду. В гонке за
+            популярный лот это норма; вне гонки — смотрите audit_log.
+
+      - alert: ConnectionDegradation
+        # >40 % — тот же порог, при котором торги уходят в SLA Freeze (ТЗ §2.2).
+        # Алерт нужен раньше заморозки: она видна участникам, а инженерам к
+        # этому моменту уже поздно.
+        expr: auction:heartbeat:degraded_share_2m > 0.4
+        for: 1m
+        labels:
+          severity: critical
+          requirement: FR-08
+        annotations:
+          summary: 'Связь деградировала более чем у 40 % клиентов'
+          description: >-
+            {{ $value | humanizePercentage }} клиентов отвечают на ping дольше 2 с.
+            Торги вот-вот уйдут в SLA Freeze — или уже ушли.
+
+      # Тик таймера пропал, а комнаты есть. Самый тихий из отказов: у клиентов
+      # просто замирает таймер, и они продолжают считать, что видят торги.
+      - alert: TimerBroadcastStopped
+        expr: >-
+          sum(rate(auction_broadcast_duration_seconds_count{event="timer_tick"}[2m])) == 0
+          and sum(auction_gateway_rooms) > 0
+        for: 1m
+        labels:
+          severity: critical
+          requirement: FR-02
+        annotations:
+          summary: 'Тики таймера не рассылаются, хотя комнаты заняты'
+          description: >-
+            Участники смотрят на замерший таймер и считают, что видят торги.
+
+      # Пауза event loop — механизм, которым GC ломает таймер (R-5). Спорный
+      # финиш торгов иначе нечем объяснить.
+      - alert: EventLoopStalled
+        expr: max(nodejs_eventloop_lag_p99_seconds) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+          requirement: NFR-04
+        annotations:
+          summary: 'Event loop встаёт на десятки миллисекунд'
+          description: >-
+            p99 задержки event loop {{ $value | humanizeDuration }}. На таких
+            паузах тик таймера уезжает, а finisher может закрыть торги позже
+            дедлайна.

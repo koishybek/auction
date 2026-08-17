@@ -8,6 +8,10 @@ pnpm-lock.yaml
 # Сгенерирован из schema.prisma командой pnpm db:erd
 docs/ERD.md
 
+# Пишет сам Next.js при каждой сборке и прямо в файле просит его не править.
+# Без этой строки format:check падает после любого прогона браузерных тестов.
+apps/web/next-env.d.ts
+
 # Go-шаблоны Helm — это не YAML, Prettier на них падает.
 # Проверяются через helm lint / helm template.
 infra/helm/*/templates/

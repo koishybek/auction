@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { CryptoModule } from './common/crypto/crypto.module';
 import { CoreModule } from './core.module';
 import { GatewayModule } from './gateway/gateway.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 
@@ -19,6 +20,6 @@ import { RedisModule } from './redis/redis.module';
  * не соберёт AuthService, и процесс просто не поднимется.
  */
 @Module({
-  imports: [CoreModule, PrismaModule, RedisModule, CryptoModule, GatewayModule],
+  imports: [CoreModule, PrismaModule, RedisModule, CryptoModule, MetricsModule, GatewayModule],
 })
 export class RealtimeModule {}

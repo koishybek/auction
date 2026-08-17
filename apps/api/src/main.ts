@@ -8,6 +8,7 @@ import { Logger, LoggerErrorInterceptor } from 'nestjs-pino';
 import { AppModule } from './app.module';
 import { configureApp, setupOpenApi } from './app.setup';
 import type { Env } from './config/env.schema';
+import { MetricsServer } from './metrics/metrics.server';
 
 async function bootstrap(): Promise<void> {
   // abortOnError: false — иначе Nest при ошибке старта убивает процесс сам, а
@@ -25,9 +26,13 @@ async function bootstrap(): Promise<void> {
   const port = config.get('API_PORT', { infer: true });
   await app.listen(port);
 
+  // Метрики — на своём порту, которого нет в ingress: наружу они не нужны
+  // никому, кроме атакующего (T-053).
+  const metricsPort = await app.get(MetricsServer).listen();
+
   logger.log(
-    { port, env: config.get('NODE_ENV', { infer: true }) },
-    `API слушает :${String(port)} — /api/health, /api/docs`,
+    { port, metricsPort, env: config.get('NODE_ENV', { infer: true }) },
+    `API слушает :${String(port)} — /api/health, /api/docs; метрики :${String(metricsPort)}/metrics`,
   );
 }
 

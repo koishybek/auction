@@ -1,0 +1,406 @@
+# Юнит-тесты правил Prometheus (T-053).
+#
+#   promtool test rules auction.rules.test.yml
+#
+# Смысл этого файла — DoD задачи: «алерт срабатывает на синтетической
+# деградации». Без него правила проверялись бы на живом инциденте, то есть
+# ровно тогда, когда проверять их поздно. Здесь же деградация задаётся рядами
+# чисел, и результат воспроизводим на любой машине без кластера.
+#
+# Заодно проверяются сами формулы квантилей — те, что рисует дашборд. Ошибка в
+# `histogram_quantile` не видна глазами: график выглядит правдоподобно, просто
+# врёт.
+
+rule_files:
+  - auction.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # Ставка укладывается в SLA: все обработки быстрее 5 мс.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'ставка в пределах SLA — тишина'
+    input_series:
+      # Бакеты кумулятивны: попавшее в 0.005 попало и во все, что больше.
+      - series: 'auction_bid_duration_seconds_bucket{le="0.001",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.0025",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.005",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.01",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.015",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.025",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.05",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.1",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.25",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.5",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="1",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="+Inf",outcome="accepted"}'
+        values: '0+60x10'
+
+    promql_expr_test:
+      # Вся масса в бакете (0.0025, 0.005] — квантиль интерполируется внутри него.
+      - expr: auction:bid_duration_seconds:p99_5m
+        eval_time: 8m
+        exp_samples:
+          - labels: 'auction:bid_duration_seconds:p99_5m'
+            value: 4.975e-03
+      - expr: auction:bid_duration_seconds:p50_5m
+        eval_time: 8m
+        exp_samples:
+          - labels: 'auction:bid_duration_seconds:p50_5m'
+            value: 3.75e-03
+
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: BidLatencyAboveSla
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # Синтетическая деградация: обработка ставки уехала в 50 мс.
+  # Это и есть проверка DoD «алерт срабатывает на синтетической деградации».
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'ставка медленнее 15 мс — алерт'
+    input_series:
+      - series: 'auction_bid_duration_seconds_bucket{le="0.001",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.0025",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.005",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.01",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.015",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.025",outcome="accepted"}'
+        values: '0+0x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.05",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.1",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.25",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="0.5",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="1",outcome="accepted"}'
+        values: '0+60x10'
+      - series: 'auction_bid_duration_seconds_bucket{le="+Inf",outcome="accepted"}'
+        values: '0+60x10'
+
+    promql_expr_test:
+      - expr: auction:bid_duration_seconds:p99_5m
+        eval_time: 8m
+        exp_samples:
+          - labels: 'auction:bid_duration_seconds:p99_5m'
+            value: 4.975e-02
+
+    alert_rule_test:
+      # Порог перейдён с первой же точки, где считается rate (1 мин), но алерт
+      # держит `for: 2m` и до третьей минуты остаётся pending. Проверяем именно
+      # это: алерт, срабатывающий от одной точки, будит людей на всплеске.
+      - eval_time: 2m
+        alertname: BidLatencyAboveSla
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: BidLatencyAboveSla
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              requirement: NFR-02
+            exp_annotations:
+              summary: 'Серверная обработка ставки медленнее 15 мс (p99)'
+              description: >-
+                p99 обработки ставки 49.75ms при пороге 15 мс. Сначала сравните с
+                auction:bid_core_duration_seconds:p99_5m: если ядро быстрое, узкое
+                место — проверки прав до него (три запроса в PostgreSQL).
+
+  # ---------------------------------------------------------------------------
+  # Вещание медленнее 5 мс (ОВ-2).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'вещание медленнее 5 мс — алерт'
+    input_series:
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.0002",event="lot_event"}'
+        values: '0+0x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.0005",event="lot_event"}'
+        values: '0+0x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.001",event="lot_event"}'
+        values: '0+0x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.002",event="lot_event"}'
+        values: '0+0x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.005",event="lot_event"}'
+        values: '0+0x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.01",event="lot_event"}'
+        values: '0+30x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.025",event="lot_event"}'
+        values: '0+30x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.1",event="lot_event"}'
+        values: '0+30x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="0.5",event="lot_event"}'
+        values: '0+30x10'
+      - series: 'auction_broadcast_duration_seconds_bucket{le="+Inf",event="lot_event"}'
+        values: '0+30x10'
+
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: BroadcastAboveSla
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              requirement: NFR-02
+            exp_annotations:
+              summary: 'Постановка события в отправку медленнее 5 мс (p99)'
+              description: >-
+                p99 вещания 9.95ms при пороге 5 мс. Смотрите размер комнаты:
+                рассылка линейна по числу подписчиков.
+
+  # ---------------------------------------------------------------------------
+  # Деградация связи у >40 % клиентов — предвестник SLA Freeze (ТЗ §2.2).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'связь деградировала у половины клиентов — алерт'
+    input_series:
+      # Половина ответов на ping уложилась в 2 с, половина — нет.
+      - series: 'auction_heartbeat_rtt_seconds_bucket{le="2"}'
+        values: '0+50x10'
+      - series: 'auction_heartbeat_rtt_seconds_bucket{le="5"}'
+        values: '0+100x10'
+      - series: 'auction_heartbeat_rtt_seconds_bucket{le="+Inf"}'
+        values: '0+100x10'
+      - series: 'auction_heartbeat_rtt_seconds_count'
+        values: '0+100x10'
+
+    promql_expr_test:
+      - expr: auction:heartbeat:degraded_share_2m
+        eval_time: 8m
+        exp_samples:
+          - labels: 'auction:heartbeat:degraded_share_2m'
+            value: 0.5
+
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: ConnectionDegradation
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              requirement: FR-08
+            exp_annotations:
+              summary: 'Связь деградировала более чем у 40 % клиентов'
+              description: >-
+                50% клиентов отвечают на ping дольше 2 с. Торги вот-вот уйдут в
+                SLA Freeze — или уже ушли.
+
+  # ---------------------------------------------------------------------------
+  # Тики пропали, комнаты остались. Самый тихий отказ: у клиентов замирает
+  # таймер, а они продолжают считать, что видят торги.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'тики таймера остановились — алерт'
+    input_series:
+      # Счётчик рассылок замер, а комнаты заняты.
+      - series: 'auction_broadcast_duration_seconds_count{event="timer_tick"}'
+        values: '600+0x10'
+      - series: 'auction_gateway_rooms'
+        values: '3+0x10'
+
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: TimerBroadcastStopped
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              requirement: FR-02
+            exp_annotations:
+              summary: 'Тики таймера не рассылаются, хотя комнаты заняты'
+              description: >-
+                Участники смотрят на замерший таймер и считают, что видят торги.
+
+  # ---------------------------------------------------------------------------
+  # Исключение на пути ставки: порог ноль, потому что одна такая ставка —
+  # инцидент, а не статистика.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'ставки падают с исключением — алерт'
+    input_series:
+      - series: 'auction_bids_total{outcome="error",code=""}'
+        values: '0+6x10'
+
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: BidPathErrors
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              requirement: FR-04
+            exp_annotations:
+              summary: 'Ставки падают с исключением'
+              description: >-
+                0.100 ошибок/с на пути ставки. Участник в этот момент не знает,
+                принята его ставка или нет.
+
+  # ---------------------------------------------------------------------------
+  # Всплеск промахов по цене (QA-04, T-048).
+  #
+  # Порог мягкий и это осознанно: в гонке за популярный лот промахи — норма, там
+  # их девяносто девять из ста. Алерт нужен для случая, когда их много ВНЕ гонки.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'много промахов по цене — предупреждение'
+    input_series:
+      # 600/мин = 10/с, вдвое выше порога.
+      - series: 'auction_bids_total{outcome="rejected",code="PRICE_MISMATCH"}'
+        values: '0+600x15'
+
+    alert_rule_test:
+      # Порог перейдён с первой точки, но `for: 5m` держит алерт в pending.
+      - eval_time: 4m
+        alertname: PriceMismatchSpike
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: PriceMismatchSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              requirement: QA-04
+            exp_annotations:
+              summary: 'Много ставок с неверной суммой'
+              description: >-
+                10.00 промахов по цене в секунду. В гонке за популярный лот это
+                норма; вне гонки — смотрите audit_log.
+
+  # ---------------------------------------------------------------------------
+  # Пауза event loop — механизм, которым GC ломает таймер торгов (R-5).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'event loop встаёт — предупреждение'
+    input_series:
+      # 80 мс при пороге 50: на такой паузе тик таймера уезжает.
+      - series: 'nodejs_eventloop_lag_p99_seconds{component="gateway",pod="gateway-1"}'
+        values: '0.08+0x10'
+      - series: 'nodejs_eventloop_lag_p99_seconds{component="api",pod="api-1"}'
+        values: '0.002+0x10'
+
+    promql_expr_test:
+      # Максимум по всем подам, а не среднее: одна вставшая нода — это уже
+      # спорный финиш на её комнатах, и усреднение её спрячет.
+      - expr: max(nodejs_eventloop_lag_p99_seconds)
+        eval_time: 5m
+        exp_samples:
+          - labels: '{}'
+            value: 0.08
+
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EventLoopStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              requirement: NFR-04
+            exp_annotations:
+              summary: 'Event loop встаёт на десятки миллисекунд'
+              description: >-
+                p99 задержки event loop 80ms. На таких паузах тик таймера уезжает,
+                а finisher может закрыть торги позже дедлайна.
+
+  # ---------------------------------------------------------------------------
+  # Выражения дашборда, которые НЕ покрыты записывающими правилами.
+  #
+  # Проверяются здесь по той же причине, по которой проверяются алерты: ошибка
+  # в PromQL не видна глазами — панель рисует правдоподобный график и молча
+  # врёт. Панели, построенные на записывающих правилах, уже проверены выше.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'выражения панелей дашборда считают то, что обещают'
+    input_series:
+      - series: 'auction_bids_total{outcome="accepted",code=""}'
+        values: '0+120x10'
+      - series: 'auction_bids_total{outcome="rejected",code="PRICE_MISMATCH"}'
+        values: '0+600x10'
+      - series: 'auction_broadcast_duration_seconds_count{event="timer_tick"}'
+        values: '0+60x10'
+      - series: 'auction_broadcast_duration_seconds_count{event="lot_event"}'
+        values: '0+30x10'
+      - series: 'auction_gateway_connections{instance="gateway-1"}'
+        values: '1200+0x10'
+      - series: 'auction_gateway_connections{instance="gateway-2"}'
+        values: '800+0x10'
+      - series: 'auction_gateway_rooms{instance="gateway-1"}'
+        values: '4+0x10'
+      - series: 'auction_gateway_rooms{instance="gateway-2"}'
+        values: '2+0x10'
+      - series: 'auction_gateway_room_connections_max{instance="gateway-1"}'
+        values: '900+0x10'
+      - series: 'auction_gateway_room_connections_max{instance="gateway-2"}'
+        values: '700+0x10'
+
+    promql_expr_test:
+      # Панель «Поток ставок по исходу»: 120/мин = 2/с, 600/мин = 10/с.
+      - expr: sum by (outcome) (rate(auction_bids_total[5m]))
+        eval_time: 8m
+        exp_samples:
+          - labels: '{outcome="accepted"}'
+            value: 2
+          - labels: '{outcome="rejected"}'
+            value: 10
+
+      # Панель «Тики таймера»: раскладка по виду события.
+      - expr: sum by (event) (rate(auction_broadcast_duration_seconds_count[5m]))
+        eval_time: 8m
+        exp_samples:
+          - labels: '{event="lot_event"}'
+            value: 0.5
+          - labels: '{event="timer_tick"}'
+            value: 1
+
+      # Панель «Соединения и комнаты»: соединения складываются по инстансам,
+      # а самая большая комната — максимум, а не сумма. Сложи их — и получишь
+      # число, которого не существует ни в одной комнате.
+      - expr: sum(auction_gateway_connections)
+        eval_time: 8m
+        exp_samples:
+          - labels: '{}'
+            value: 2000
+      - expr: sum(auction_gateway_rooms)
+        eval_time: 8m
+        exp_samples:
+          - labels: '{}'
+            value: 6
+      - expr: max(auction_gateway_room_connections_max)
+        eval_time: 8m
+        exp_samples:
+          - labels: '{}'
+            value: 900
+
+  # ---------------------------------------------------------------------------
+  # Комната подошла к проектному предельному размеру (NFR-03).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: 'комната у предела — предупреждение'
+    input_series:
+      - series: 'auction_gateway_room_connections_max{instance="gateway-1"}'
+        values: '46000+0x10'
+
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: RoomNearCapacity
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              requirement: NFR-03
+            exp_annotations:
+              summary: 'Комната лота подошла к проектному пределу'
+              description: >-
+                В самой большой комнате 46000 соединений. Добавьте инстансы
+                gateway: комнаты живут на каждом инстансе своим составом.

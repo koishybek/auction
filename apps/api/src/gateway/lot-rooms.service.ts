@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import type { Redis } from 'ioredis';
 
 import { BidService } from '../auction/bid.service';
+import { MetricsService, secondsSince } from '../metrics/metrics.service';
 import { RedisService } from '../redis/redis.service';
 
 /** Кому доставлять события лота. Ровно то, что нужно комнате от соединения. */
@@ -32,6 +33,7 @@ export class LotRoomsService implements OnModuleDestroy {
   constructor(
     redis: RedisService,
     private readonly bids: BidService,
+    private readonly metrics: MetricsService,
   ) {
     // Отдельное соединение: в режиме подписки Redis не принимает обычных команд.
     this.subscriber = redis.createDedicatedClient('gateway:subscriber');
@@ -55,9 +57,18 @@ export class LotRoomsService implements OnModuleDestroy {
     return [...this.rooms.keys()];
   }
 
+  /** Соединений в самой большой комнате. По ней виден запас до 50 000 (NFR-03). */
+  largestRoom(): number {
+    let largest = 0;
+    for (const room of this.rooms.values()) {
+      largest = Math.max(largest, room.size);
+    }
+    return largest;
+  }
+
   /** Разослать готовый кадр всем в комнате. */
   broadcast(lotId: string, payload: string): void {
-    this.sendToRoom(lotId, payload);
+    this.sendToRoom(lotId, payload, 'timer_tick');
   }
 
   async join(lotId: string, member: RoomMember): Promise<void> {
@@ -100,15 +111,33 @@ export class LotRoomsService implements OnModuleDestroy {
    * Разбирать и сериализовать заново на каждое соединение — это чистая потеря
    * на горячем пути, где SLA на рассылку 5 мс.
    */
+  /**
+   * Метка события для метрики вещания: `lot_event` для всего, что пришло из
+   * pub/sub, `timer_tick` для тика.
+   *
+   * Точнее не различаем намеренно: имя события лежит внутри payload, а разбирать
+   * JSON на горячем пути ради метки — это ровно та работа, от которой мы здесь
+   * уходим. Различие «тик или событие лота» и есть то, что важно для SLA:
+   * события лота — латентно-критичные, тик приходит по расписанию.
+   */
   private deliver(channel: string, payload: string): void {
-    this.sendToRoom(channel.slice(channel.lastIndexOf(':') + 1), payload);
+    this.sendToRoom(channel.slice(channel.lastIndexOf(':') + 1), payload, 'lot_event');
   }
 
-  private sendToRoom(lotId: string, payload: string): void {
+  private sendToRoom(lotId: string, payload: string, event: string): void {
     const room = this.rooms.get(lotId);
     if (room === undefined) {
       return;
     }
+
+    /**
+     * Замер вещания. ОВ-2 определяет его дословно как «время постановки в
+     * отправку» — то есть ровно длительность этого цикла, а не путь пакета до
+     * браузера. Считать по часам («когда событие родилось в Redis» минус
+     * «сейчас») нельзя: это разные часы, и метрика мерила бы дрейф NTP вместе с
+     * работой gateway.
+     */
+    const startedAt = process.hrtime.bigint();
 
     for (const member of room) {
       try {
@@ -122,6 +151,8 @@ export class LotRoomsService implements OnModuleDestroy {
         );
       }
     }
+
+    this.metrics.observeBroadcast(event, secondsSince(startedAt));
   }
 
   async onModuleDestroy(): Promise<void> {

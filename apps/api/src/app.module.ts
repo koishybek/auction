@@ -11,6 +11,7 @@ import { CoreModule } from './core.module';
 import { DocumentsModule } from './documents/documents.module';
 import { HealthModule } from './health/health.module';
 import { LotsModule } from './lots/lots.module';
+import { MetricsModule } from './metrics/metrics.module';
 import { PartnersModule } from './partners/partners.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
@@ -26,6 +27,7 @@ import { UsersModule } from './users/users.module';
     RedisModule,
     CryptoModule,
     TimeModule,
+    MetricsModule,
     AuthModule,
     UsersModule,
     AdminModule,

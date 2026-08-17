@@ -7,6 +7,7 @@ import { Logger } from 'nestjs-pino';
 
 import type { Env } from './config/env.schema';
 import { WsGatewayService } from './gateway/ws-gateway.service';
+import { MetricsServer } from './metrics/metrics.server';
 import { RealtimeModule } from './realtime.module';
 
 /**
@@ -31,10 +32,13 @@ async function bootstrap(): Promise<void> {
 
   const config = app.get(ConfigService<Env, true>);
   const port = await app.get(WsGatewayService).listen();
+  // Метрики на своём порту: у gateway тот же образ и тот же вход для сбора,
+  // что у API и воркера (T-053).
+  const metricsPort = await app.get(MetricsServer).listen();
 
   logger.log(
-    { port, env: config.get('NODE_ENV', { infer: true }) },
-    `WS-gateway слушает :${String(port)} — /health для проб`,
+    { port, metricsPort, env: config.get('NODE_ENV', { infer: true }) },
+    `WS-gateway слушает :${String(port)} — /health для проб; метрики :${String(metricsPort)}/metrics`,
   );
 }
 

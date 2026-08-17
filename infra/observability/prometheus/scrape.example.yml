@@ -1,0 +1,50 @@
+# Пример конфигурации сбора (T-053). Не применяется автоматически — это образец
+# для того Prometheus, который будет поднят в кластере (T-009).
+#
+# Цели находятся по аннотациям подов, которые ставит чарт
+# (infra/helm/auction/templates/*.yaml): prometheus.io/scrape, /port, /path.
+# ServiceMonitor не используется намеренно — он требует CRD Prometheus Operator,
+# а чарт не должен зависеть от того, каким способом развёрнут сбор метрик.
+
+global:
+  # Тик таймера идёт раз в секунду, а окно оценки алертов — минуты. Пятнадцати
+  # секунд достаточно, чтобы увидеть деградацию, и не столько, чтобы хранить
+  # лишние точки по каждому бакету гистограммы.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - auction.rules.yml
+
+scrape_configs:
+  - job_name: auction
+    kubernetes_sd_configs:
+      - role: pod
+    relabel_configs:
+      # Собираем только помеченные поды: иначе Prometheus будет стучаться в
+      # каждый под кластера и половина целей окажется красной.
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+        action: keep
+        regex: 'true'
+
+      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+
+      # Адрес цели — порт метрик из аннотации, а не порт приложения.
+      - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+        action: replace
+        regex: '([^:]+)(?::\d+)?;(\d+)'
+        replacement: '$1:$2'
+        target_label: __address__
+
+      # Компонент (api / gateway / workers) — из метки чарта. По ней на дашборде
+      # различаются процессы: у них разный профиль нагрузки и разные метрики.
+      - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+        action: replace
+        target_label: component
+
+      - source_labels: [__meta_kubernetes_pod_name]
+        action: replace
+        target_label: pod
