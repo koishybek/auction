@@ -323,6 +323,14 @@ export class WsGatewayService implements OnModuleDestroy {
       lot_id: lotId,
       code: result.code,
       ...(result.retryAfterMs === undefined ? {} : { retry_after_ms: result.retryAfterMs }),
+      // Наружу тенге, внутри тиыны — конвертация уже сделана в placement.
+      ...(result.live === undefined
+        ? {}
+        : {
+            current_price_kzt: result.live.currentPriceTenge,
+            next_price_kzt: result.live.nextPriceTenge,
+            seq: result.live.seq,
+          }),
     };
     connection.send(JSON.stringify(rejected));
   }

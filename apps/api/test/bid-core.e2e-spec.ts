@@ -90,6 +90,16 @@ describe('T-024: атомарное ядро ставки', () => {
     expect(accepted).toHaveLength(1);
     expect(mismatched).toHaveLength(99);
 
+    // Каждый отказ называет цену, которая стала актуальной, и сумму следующей
+    // ставки. Без этого девяносто девять проигравших переспрашивали бы состояние
+    // отдельными запросами — всплеск нагрузки ровно в момент борьбы за лот (T-052).
+    for (const outcome of mismatched) {
+      if (outcome.status !== 'REJECTED') throw new Error('ожидался отказ');
+      expect(outcome.live?.priceTiyn).toBe(4_635_000_000n);
+      expect(outcome.live?.nextPriceTiyn).toBe(4_774_050_000n); // 46 350 000 ₸ +3 %
+      expect(outcome.live?.seq).toBe(1);
+    }
+
     // Цена сдвинулась ровно на один шаг, номер ставки — ровно один.
     const live = await state.read(lotId);
     expect(live?.priceTiyn).toBe(4_635_000_000n);
@@ -186,10 +196,29 @@ describe('T-024: атомарное ядро ставки', () => {
     expect(outcome.status === 'REJECTED' && outcome.code).toBe('TIMER_EXPIRED');
   });
 
-  it('по лоту без торгов ставка невозможна', async () => {
+  it('по лоту без торгов ставка невозможна и цены в отказе нет', async () => {
     const outcome = await place(crypto.randomUUID(), 100n);
     expect(outcome.status).toBe('REJECTED');
     expect(outcome.status === 'REJECTED' && outcome.code).toBe('NO_SESSION');
+    // Ноль вместо отсутствующей цены выглядел бы как настоящая цена и уехал бы
+    // участнику на кнопку.
+    expect(outcome.status === 'REJECTED' && outcome.live).toBeUndefined();
+  });
+
+  it('неправдоподобная сумма отклоняется, но цену узнать позволяет', async () => {
+    const { lotId } = await openSession(1_000_000);
+
+    // Выше предела точности Lua (2^53): в скрипт такая сумма не передаётся, там
+    // она стала бы приблизительной. Но отказ обязан быть таким же, как любой
+    // другой промах по цене, — иначе ровно этот участник остался бы
+    // единственным, кто цену не узнал.
+    const outcome = await place(lotId, BigInt(Number.MAX_SAFE_INTEGER) + 1n);
+    expect(outcome.status).toBe('REJECTED');
+    expect(outcome.status === 'REJECTED' && outcome.code).toBe('PRICE_MISMATCH');
+    expect(outcome.status === 'REJECTED' && outcome.live?.priceTiyn).toBe(100_000_000n);
+
+    const live = await state.read(lotId);
+    expect(live?.seq).toBe(0);
   });
 
   it('принятая ставка публикуется в канал лота', async () => {

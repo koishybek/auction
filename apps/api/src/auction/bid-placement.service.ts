@@ -18,6 +18,19 @@ export type PlacementResult =
       readonly code: BidRejectCode;
       /** Через сколько мс можно повторить. Заполняется только для RATE_LIMITED. */
       readonly retryAfterMs?: number;
+      /**
+       * Актуальное состояние торгов на момент отказа, суммы в целых тенге.
+       *
+       * Есть у отказов ядра — там цена известна тому же скрипту, что отказал.
+       * У отказов по праву (нет задатка, не верифицирован) отсутствует: цена от
+       * них не менялась, а лишний поход в Redis на каждой такой попытке —
+       * плата за информацию, которая участнику ничего не меняет.
+       */
+      readonly live?: {
+        readonly currentPriceTenge: number;
+        readonly nextPriceTenge: number;
+        readonly seq: number;
+      };
     };
 
 /**
@@ -116,12 +129,25 @@ export class BidPlacementService {
     });
 
     if (outcome.status === 'REJECTED') {
-      // Сумму, которую сервер ждал, читаем только здесь — на пути принятой
-      // ставки этот запрос не нужен, а по отказу без неё непонятно, насколько
-      // участник промахнулся (QA-04).
-      const expected = await this.bids.nextPriceTiyn(input.lotId).catch(() => null);
-      this.audit(input, outcome.code, expected);
-      return { status: 'REJECTED', code: outcome.code };
+      // Сумму, которую сервер ждал, приносит сам отказ. Отдельным запросом её
+      // читать нельзя: отказ в гонке — это 99 путей из 100, и лишний round-trip
+      // на каждом означал бы, что чем острее борьба за лот, тем медленнее
+      // система (T-052). Без неё же по отказу непонятно, насколько участник
+      // промахнулся (QA-04).
+      this.audit(input, outcome.code, outcome.live?.nextPriceTiyn ?? null);
+      return {
+        status: 'REJECTED',
+        code: outcome.code,
+        ...(outcome.live === undefined
+          ? {}
+          : {
+              live: {
+                currentPriceTenge: Number(outcome.live.priceTiyn / 100n),
+                nextPriceTenge: Number(outcome.live.nextPriceTiyn / 100n),
+                seq: outcome.live.seq,
+              },
+            }),
+      };
     }
     return {
       status: 'ACCEPTED',

@@ -2,6 +2,7 @@
 
 import type {
   BehaviorSignals,
+  BidRejectedEvent,
   BidUpdatedEvent,
   StateSnapshotEvent,
   TimerTickEvent,
@@ -10,6 +11,7 @@ import { create } from 'zustand';
 
 import {
   applyBid,
+  applyRejection,
   applySnapshot,
   applyTick,
   initialHall,
@@ -164,9 +166,16 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
           at: performance.now(),
         },
       });
-      // Цена могла уйти вперёд — переспрашиваем снимок, чтобы кнопка не
-      // показывала сумму, которую сервер уже не примет.
-      resync();
+
+      // Цена могла уйти вперёд, и кнопка не должна показывать сумму, которую
+      // сервер уже не примет. Отказ ядра называет цену сам — тогда снимок не
+      // нужен; снимок на каждый отказ означал бы, что в гонке за лот сервер
+      // получает столько же запросов, сколько проигравших (T-052).
+      const rejection = applyRejection(get().hall, raw as BidRejectedEvent);
+      set({ hall: rejection.state });
+      if (rejection.resyncNeeded) {
+        resync();
+      }
     }
   }
 

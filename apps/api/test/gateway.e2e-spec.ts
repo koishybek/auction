@@ -721,8 +721,54 @@ describe('T-023: WS-gateway, комнаты и мост pub/sub', () => {
       });
       const rejected = await client.waitFor('bid_rejected');
       expect(rejected['code']).toBe('PRICE_MISMATCH');
+
+      // Отказ называет цену: без неё кнопка осталась бы с суммой, которую
+      // сервер не примет, и участник узнал бы правду только из общего события.
+      expect(rejected['current_price_kzt']).toBe(snapshot['current_price_kzt']);
+      expect(rejected['next_price_kzt']).toBe(snapshot['next_price_kzt']);
+      expect(rejected['seq']).toBe(0);
     } finally {
       client.close();
+    }
+  });
+
+  it('DoD T-052: проигравший в гонке узнаёт актуальную цену из самого отказа', async () => {
+    const { lot } = await lotInAuction();
+    const winner = await bidder(lot.id);
+    const loser = await bidder(lot.id);
+
+    const first = await connect(portA);
+    const second = await connect(portB);
+    try {
+      first.send({ event: 'join_lot', lot_id: lot.id, token: winner.tokens.accessToken });
+      second.send({ event: 'join_lot', lot_id: lot.id, token: loser.tokens.accessToken });
+      const snapshot = await first.waitFor('state_snapshot');
+      await second.waitFor('state_snapshot');
+
+      const contested = Number(snapshot['next_price_kzt']);
+      first.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: contested });
+      await first.waitFor('bid_accepted');
+
+      // Пауза — не борьба с нестабильностью, а само правило FR-10: не чаще
+      // одной ставки в 500 мс на адрес, а оба участника здесь с 127.0.0.1.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+
+      // Второй посылает ту же сумму: он отправил её до того, как узнал о первой
+      // ставке. Ровно так выглядит гонка за лот со стороны проигравшего.
+      second.send({ event: 'place_bid', lot_id: lot.id, amount_kzt: contested });
+      const rejected = await second.waitFor('bid_rejected');
+
+      expect(rejected['code']).toBe('PRICE_MISMATCH');
+      // Цена, которую он назвал, теперь текущая, а ставить нужно на шаг выше.
+      expect(rejected['current_price_kzt']).toBe(contested);
+      expect(rejected['next_price_kzt']).toBe(Math.round(contested * 1.03));
+      expect(rejected['seq']).toBe(1);
+      // Псевдоним победителя в личный отказ не попадает: кто именно перебил —
+      // не дело проигравшего, это узнаётся из ленты (FR-09).
+      expect(JSON.stringify(rejected)).not.toContain(winner.id);
+    } finally {
+      first.close();
+      second.close();
     }
   });
 

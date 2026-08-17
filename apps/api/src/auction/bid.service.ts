@@ -15,7 +15,24 @@ export type BidOutcome =
       readonly deadlineMs: number;
       readonly serverTs: number;
     }
-  | { readonly status: 'REJECTED'; readonly code: BidRaceCode };
+  | {
+      readonly status: 'REJECTED';
+      readonly code: BidRaceCode;
+      /**
+       * Состояние торгов на момент отказа — то, что участнику нужно, чтобы
+       * поставить снова (QA-02).
+       *
+       * Отсутствует только при `NO_SESSION`: у лота без торгов цены не
+       * существует. В остальных случаях приходит всегда, потому что считается
+       * тем же скриптом, что и отказ, — без второго обращения в Redis.
+       */
+      readonly live?: {
+        readonly priceTiyn: bigint;
+        readonly nextPriceTiyn: bigint;
+        /** Номер последней принятой ставки. */
+        readonly seq: number;
+      };
+    };
 
 /** Следующая цена по правилам шага. nil, если торгов нет. */
 const NEXT_PRICE = `
@@ -44,19 +61,41 @@ return string.format('%.0f', nextPriceTiyn(tonumber(price)))
  * ARGV[4] — таймер в мс, ARGV[5] — TTL ключа в мс
  * ARGV[6] — канал оповещения, ARGV[7] — id лота
  */
-const PLACE_BID = `
+export const PLACE_BID_LUA = `
 ${NEXT_PRICE_LUA}
 local state = redis.call('HMGET', KEYS[1],
   'status', 'priceTiyn', 'seq', 'deadlineMs', 'sessionId', 'lastBidderId', 'lastBlindCode')
 if not state[1] then
   return { 'NO_SESSION' }
 end
+
+-- Отказ обязан назвать актуальную цену и сумму следующей ставки.
+--
+-- Иначе проигравший в гонке узнаёт цену только из широковещательного
+-- bid_updated, а до тех пор его кнопка показывает сумму, которую сервер уже не
+-- примет. На сотне одновременных ставок каждый из 99 проигравших переспрашивал
+-- бы снимок отдельным запросом — то есть система сама устраивала бы себе
+-- всплеск нагрузки ровно в тот момент, когда ей тяжелее всего (T-052).
+--
+-- Считается здесь, тем же скриптом, что и отказ: второе обращение в Redis за
+-- ценой стоило бы round-trip на КАЖДОМ отказе, а отказ в гонке — это 99 путей
+-- из 100. Порядок полей общий с принятой ставкой: код, цена, seq.
+local function rejected(code)
+  local price = tonumber(state[2])
+  return {
+    code,
+    string.format('%.0f', price),
+    tostring(state[3]),
+    string.format('%.0f', nextPriceTiyn(price))
+  }
+end
+
 if state[1] ~= 'RUNNING' then
-  return { 'NOT_RUNNING' }
+  return rejected('NOT_RUNNING')
 end
 ${NOW_MS_LUA}
 if nowMs >= tonumber(state[4]) then
-  return { 'TIMER_EXPIRED' }
+  return rejected('TIMER_EXPIRED')
 end
 
 -- Перебивать собственную последнюю ставку запрещено (ТЗ, self-outbid).
@@ -69,12 +108,12 @@ end
 -- Раньше сверки суммы намеренно: «вы и так лидируете» полезнее для человека,
 -- чем «цена изменилась», хотя формально верно и то и другое.
 if state[6] == ARGV[2] then
-  return { 'SELF_OUTBID' }
+  return rejected('SELF_OUTBID')
 end
 
 local nextTiyn = nextPriceTiyn(tonumber(state[2]))
 if tonumber(ARGV[1]) ~= nextTiyn then
-  return { 'PRICE_MISMATCH' }
+  return rejected('PRICE_MISMATCH')
 end
 
 local seq = tonumber(state[3]) + 1
@@ -146,10 +185,21 @@ return {
 
 /**
  * Предел, за которым число Lua перестаёт быть точным целым (2^53 − 1).
- * Сумма выше этого до скрипта не доходит: там она превратилась бы в
+ * Сумма выше этого в скрипт не передаётся: там она превратилась бы в
  * приблизительную, и сравнение «равно ли шагу» стало бы лотереей.
  */
 const MAX_EXACT_TIYN = BigInt(Number.MAX_SAFE_INTEGER);
+
+/**
+ * Что уходит в скрипт вместо неправдоподобной суммы.
+ *
+ * Отрицательное значение не равно шагу ни при какой цене, поэтому скрипт
+ * отклонит его как обычный промах — и назовёт актуальную цену. Возвращать отказ
+ * до вызова скрипта нельзя: тогда ровно этот участник остался бы единственным,
+ * кто цену не узнал, и разбирать в клиенте пришлось бы два вида отказа вместо
+ * одного. В аудит идёт присланная сумма, а не эта подстановка.
+ */
+const IMPLAUSIBLE_AMOUNT = '-1';
 
 /**
  * Приём ставки (T-024).
@@ -168,7 +218,7 @@ export class BidService {
     private readonly state: AuctionStateService,
   ) {
     this.nextPriceScript = redis.script(NEXT_PRICE);
-    this.placeScript = redis.script(PLACE_BID);
+    this.placeScript = redis.script(PLACE_BID_LUA);
   }
 
   /** Канал оповещений по лоту. Через него gateway разошлёт событие клиентам (T-023). */
@@ -209,21 +259,27 @@ export class BidService {
     return BigInt(raw);
   }
 
-  /** Принять ставку или отказать. Изменение состояния целиком внутри Lua. */
-  async place(input: {
+  /**
+   * Ключи и аргументы одного вызова скрипта ставки.
+   *
+   * Вынесено из `place` не ради красоты: concurrency-харнесс (T-052) обязан
+   * отправлять сто ставок ОДНОЙ записью в сокет — иначе первая успевает
+   * выполниться раньше, чем уйдёт последняя, и одновременности не существует.
+   * Собирай он вызов сам, он проверял бы свою копию соглашения о порядке
+   * аргументов, а не боевой путь ставки.
+   */
+  placementCall(input: {
     lotId: string;
     bidderId: string;
     blindCode: string;
     expectedAmountTiyn: bigint;
-  }): Promise<BidOutcome> {
-    if (input.expectedAmountTiyn < 0n || input.expectedAmountTiyn > MAX_EXACT_TIYN) {
-      return { status: 'REJECTED', code: 'PRICE_MISMATCH' };
-    }
+  }): { readonly keys: readonly string[]; readonly args: readonly (string | number)[] } {
+    const plausible = input.expectedAmountTiyn >= 0n && input.expectedAmountTiyn <= MAX_EXACT_TIYN;
 
-    const raw = await this.placeScript.run(
-      [this.state.stateKey(input.lotId), this.state.deadlinesKey(), this.outboxKey()],
-      [
-        input.expectedAmountTiyn.toString(),
+    return {
+      keys: [this.state.stateKey(input.lotId), this.state.deadlinesKey(), this.outboxKey()],
+      args: [
+        plausible ? input.expectedAmountTiyn.toString() : IMPLAUSIBLE_AMOUNT,
         input.bidderId,
         input.blindCode,
         SMART_HAMMER_TIMER_MS,
@@ -231,13 +287,29 @@ export class BidService {
         this.channel(input.lotId),
         input.lotId,
       ],
-    );
+    };
+  }
 
-    return parseOutcome(raw);
+  /** Принять ставку или отказать. Изменение состояния целиком внутри Lua. */
+  async place(input: {
+    lotId: string;
+    bidderId: string;
+    blindCode: string;
+    expectedAmountTiyn: bigint;
+  }): Promise<BidOutcome> {
+    const call = this.placementCall(input);
+    return parseBidOutcome(await this.placeScript.run(call.keys, call.args));
   }
 }
 
-function parseOutcome(raw: unknown): BidOutcome {
+/**
+ * Разбор ответа скрипта.
+ *
+ * Экспортируется для харнесса гонки: он отправляет ставки пачкой и получает
+ * сырые ответы одним массивом. Разбирай он их сам — сверял бы результат со
+ * своим представлением о контракте скрипта, а не с настоящим.
+ */
+export function parseBidOutcome(raw: unknown): BidOutcome {
   if (!Array.isArray(raw)) {
     throw new Error(`Скрипт ставки вернул не массив: ${JSON.stringify(raw)}`);
   }
@@ -254,7 +326,20 @@ function parseOutcome(raw: unknown): BidOutcome {
     };
   }
   if (isRaceCode(code)) {
-    return { status: 'REJECTED', code };
+    // У лота без торгов цены нет — и подставлять ноль вместо неё нельзя: ноль
+    // выглядит как настоящая цена и уедет на кнопку участника.
+    if (parts.length < 4) {
+      return { status: 'REJECTED', code };
+    }
+    return {
+      status: 'REJECTED',
+      code,
+      live: {
+        priceTiyn: BigInt(parts[1] ?? '0'),
+        seq: Number(parts[2] ?? '0'),
+        nextPriceTiyn: BigInt(parts[3] ?? '0'),
+      },
+    };
   }
   throw new Error(`Скрипт ставки вернул неизвестный код: ${String(code)}`);
 }

@@ -1,4 +1,9 @@
-import type { BidUpdatedEvent, StateSnapshotEvent, TimerTickEvent } from '@auction/shared';
+import type {
+  BidRejectedEvent,
+  BidUpdatedEvent,
+  StateSnapshotEvent,
+  TimerTickEvent,
+} from '@auction/shared';
 
 /**
  * Правила аукционного зала (T-039, FR-13).
@@ -138,6 +143,52 @@ export function applyBid(state: HallState, event: BidUpdatedEvent): HallState {
     timeRemainingMs: event.time_remaining_ms,
     seq: event.seq,
     feed: [entryOf(event), ...state.feed].slice(0, FEED_LIMIT),
+  };
+}
+
+/**
+ * Коды отказа, которые означают «торги больше не идут».
+ *
+ * Их мало, и они особые: цену отказ приносит, а СТАТУС — нет. Поэтому по ним
+ * снимок всё-таки нужен, иначе участник смотрел бы на идущие торги, которых
+ * нет. Об остановке ему скажут и `sla_freeze`/`auction_finished`, но отказ по
+ * собственной ставке — единственный момент, когда точно известно, что клиент
+ * чего-то не знает.
+ */
+const STATUS_CHANGING_CODES: readonly string[] = ['NOT_RUNNING', 'TIMER_EXPIRED'];
+
+/**
+ * Применить отказ по собственной ставке.
+ *
+ * Отказ приносит актуальную цену — значит переспрашивать снимок не нужно.
+ * Не мелочь: в гонке за лот отказ получают все, кроме одного, и снимок в ответ
+ * на каждый отказ означал бы, что чем острее борьба, тем больше запросов
+ * прилетает серверу (T-052).
+ *
+ * `resyncNeeded` — когда цены в отказе не было (нет задатка, торгов нет, промах
+ * по частоте) или когда отказ говорит об остановке торгов.
+ *
+ * Запоздавший отказ отбрасывается по номеру ставки, как и запоздавшее
+ * `bid_updated`: откат цены назад на кнопке означал бы ставку не на ту сумму.
+ * Лента не пополняется — отклонённой ставки не было, и показывать её как
+ * событие торгов нельзя.
+ */
+export function applyRejection(
+  state: HallState,
+  event: BidRejectedEvent,
+): { readonly state: HallState; readonly resyncNeeded: boolean } {
+  const { current_price_kzt: price, next_price_kzt: next, seq } = event;
+  if (price === undefined || next === undefined || seq === undefined) {
+    return { state, resyncNeeded: true };
+  }
+
+  const resyncNeeded = STATUS_CHANGING_CODES.includes(event.code);
+  if (seq < state.seq) {
+    return { state, resyncNeeded };
+  }
+  return {
+    state: { ...state, currentPriceTenge: price, nextPriceTenge: next, seq },
+    resyncNeeded,
   };
 }
 

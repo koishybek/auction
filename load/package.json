@@ -5,6 +5,7 @@
   "description": "Нагрузочные сценарии k6: зал торгов и гонка ставок (QA-01, QA-02)",
   "scripts": {
     "seed": "tsx seed-lot.ts",
+    "race": "tsx bid-race.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

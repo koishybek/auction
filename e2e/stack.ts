@@ -40,7 +40,15 @@ export function repoRoot(): string {
 export function testDatabaseUrl(): string {
   const root = repoRoot();
   // Node сам читает .env: отдельной зависимости ради трёх строк не нужно.
-  process.loadEnvFile(resolve(root, '.env'));
+  //
+  // Отсутствие файла — не ошибка: в CI переменные приходят из окружения job'а,
+  // и .env там нет вовсе. Падать на этом значило бы запретить прогон в CI ради
+  // удобства локального запуска.
+  try {
+    process.loadEnvFile(resolve(root, '.env'));
+  } catch {
+    // Значения проверяются ниже — по факту наличия, а не по источнику.
+  }
 
   const raw = process.env['DATABASE_URL'];
   if (raw === undefined || raw === '') {

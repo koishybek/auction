@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   applyBid,
+  applyRejection,
   applySnapshot,
   applyTick,
   bidLabel,
@@ -174,6 +175,78 @@ describe('T-039: состояние зала', () => {
     // Сервер видит ставку номер 3, а мы её не получили — это потеря события.
     const skipped = applyTick(state, tick(50_000, 3));
     expect(skipped.resyncNeeded).toBe(true);
+  });
+
+  it('DoD T-052: отказ в гонке сам приносит актуальную цену', () => {
+    const state = applySnapshot(snapshot());
+
+    // Пока участник отправлял ставку, лот ушёл на шаг вперёд. Отказ называет
+    // новую цену — переспрашивать снимок незачем, а в гонке за лот такой
+    // переспрос делал бы каждый из девяноста девяти проигравших.
+    const applied = applyRejection(state, {
+      event: 'bid_rejected',
+      lot_id: LOT,
+      code: 'PRICE_MISMATCH',
+      current_price_kzt: 1_030_000,
+      next_price_kzt: 1_060_900,
+      seq: 1,
+    });
+
+    expect(applied.state.currentPriceTenge).toBe(1_030_000);
+    expect(applied.state.nextPriceTenge).toBe(1_060_900);
+    expect(applied.state.seq).toBe(1);
+    // Главное: снимок переспрашивать не нужно — цена уже известна.
+    expect(applied.resyncNeeded).toBe(false);
+    // Отклонённой ставки не было — в ленте торгов ей места нет.
+    expect(applied.state.feed).toHaveLength(0);
+  });
+
+  it('отказ без цены требует снимка', () => {
+    const state = applySnapshot(snapshot());
+
+    // Нет задатка, промах по частоте — цена от этого не менялась, и сервер её не
+    // присылает. Убедиться, что кнопка права, можно только снимком.
+    const applied = applyRejection(state, {
+      event: 'bid_rejected',
+      lot_id: LOT,
+      code: 'NO_DEPOSIT',
+    });
+    expect(applied.state).toBe(state);
+    expect(applied.resyncNeeded).toBe(true);
+  });
+
+  it('отказ «торги не идут» требует снимка даже с ценой', () => {
+    const state = applySnapshot(snapshot());
+
+    // Цену отказ принёс, а статус — нет. Без снимка участник смотрел бы на
+    // идущие торги, которых уже не существует.
+    const applied = applyRejection(state, {
+      event: 'bid_rejected',
+      lot_id: LOT,
+      code: 'TIMER_EXPIRED',
+      current_price_kzt: 1_000_000,
+      next_price_kzt: 1_030_000,
+      seq: 0,
+    });
+    expect(applied.resyncNeeded).toBe(true);
+  });
+
+  it('запоздавший отказ не откатывает цену назад', () => {
+    const ahead = applyBid(applySnapshot(snapshot()), bid(2, 1_060_900));
+
+    const stale = applyRejection(ahead, {
+      event: 'bid_rejected',
+      lot_id: LOT,
+      code: 'PRICE_MISMATCH',
+      current_price_kzt: 1_030_000,
+      next_price_kzt: 1_060_900,
+      seq: 1,
+    });
+
+    // Отказ посчитан раньше, чем пришла ставка №2. Применить его значило бы
+    // поставить на сумму, которую сервер уже не принимает.
+    expect(stale.state).toBe(ahead);
+    expect(stale.state.currentPriceTenge).toBe(1_060_900);
   });
 
   it('ставить можно только вошедшему и только в идущих торгах', () => {
