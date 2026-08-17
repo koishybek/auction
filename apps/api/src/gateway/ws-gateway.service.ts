@@ -19,6 +19,7 @@ import { AuctionService } from '../auction/auction.service';
 import { BidPlacementService } from '../auction/bid-placement.service';
 import { DEGRADED_RTT_MS, SlaFreezeService } from '../auction/sla-freeze.service';
 import { ACCESS_COOKIE, cookieValue } from '../auth/session-cookies';
+import { clientIpFrom } from '../common/http/client-ip';
 import { TokenService } from '../auth/token.service';
 import type { Env } from '../config/env.schema';
 import { TimeService } from '../time/time.service';
@@ -101,6 +102,7 @@ export class WsGatewayService implements OnModuleDestroy {
   private readonly connections = new Set<Connection>();
   private readonly defaultPort: number;
   private readonly trustProxyHops: number;
+  private readonly trustCloudflareIp: boolean;
   private http: Server | null = null;
   private wss: WebSocketServer | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
@@ -119,6 +121,7 @@ export class WsGatewayService implements OnModuleDestroy {
   ) {
     this.defaultPort = config.get('GATEWAY_PORT', { infer: true });
     this.trustProxyHops = config.get('TRUST_PROXY_HOPS', { infer: true });
+    this.trustCloudflareIp = config.get('TRUST_CLOUDFLARE_IP', { infer: true });
   }
 
   /**
@@ -194,7 +197,7 @@ export class WsGatewayService implements OnModuleDestroy {
       // него нет и быть не должно. Служебные клиенты по-прежнему могут прислать
       // токен в join_lot.
       userId: this.userFromCookie(request),
-      ip: clientIp(request, this.trustProxyHops),
+      ip: clientIp(request, this.trustProxyHops, this.trustCloudflareIp),
       missedPongs: 0,
       pingSentAt: null,
       rttMs: null,
@@ -566,8 +569,17 @@ function toSnapshotEvent(
  * записям X-Forwarded-For. Заголовок дописывает кто угодно, включая самого
  * клиента, а на адресе держится лимит частоты ставок.
  */
-function clientIp(request: IncomingMessage, hops: number): string | null {
+function clientIp(request: IncomingMessage, hops: number, trustCloudflare: boolean): string | null {
   const direct = request.socket.remoteAddress ?? null;
+
+  // За Cloudflare настоящий адрес приходит отдельным заголовком — тем же, что
+  // читает REST (T-050). Один источник на оба транспорта: разъехавшись, они
+  // дали бы разные адреса одному человеку в лимите и в аудите.
+  const viaCloudflare = clientIpFrom(request.headers, null, trustCloudflare);
+  if (viaCloudflare !== null) {
+    return viaCloudflare;
+  }
+
   if (hops <= 0) {
     return direct;
   }

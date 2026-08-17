@@ -7,6 +7,7 @@ import { Logger } from 'nestjs-pino';
 import { cleanupOpenApiDoc } from 'nestjs-zod';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
+import { clientIpFrom } from './common/http/client-ip';
 import type { Env } from './config/env.schema';
 
 /**
@@ -50,6 +51,23 @@ export function configureApp(app: INestApplication, options?: { shutdownHooks?: 
    */
   const config = app.get<ConfigService<Env, true>>(ConfigService);
   expressApp.set('trust proxy', config.get('TRUST_PROXY_HOPS', { infer: true }));
+
+  /**
+   * Адрес клиента за Cloudflare (T-050).
+   *
+   * Подменяем `req.ip` один раз здесь, а не в каждом месте, где адрес нужен:
+   * лимит ставок, антинакрутка просмотров, аудит и капча обязаны видеть один
+   * и тот же адрес. Разъехавшиеся источники означали бы, что лимит считает
+   * одного человека, а аудит записывает другого.
+   */
+  const trustCloudflare = config.get('TRUST_CLOUDFLARE_IP', { infer: true });
+  expressApp.use((request, _response, next) => {
+    const resolved = clientIpFrom(request.headers, request.ip ?? null, trustCloudflare);
+    if (resolved !== null && resolved !== request.ip) {
+      Object.defineProperty(request, 'ip', { get: () => resolved, configurable: true });
+    }
+    next();
+  });
 }
 
 /** OpenAPI. В e2e не нужен, поэтому отдельно от configureApp. */

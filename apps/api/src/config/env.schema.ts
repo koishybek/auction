@@ -70,6 +70,28 @@ export const envSchema = z.object({
    */
   TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(10).default(0),
 
+  /**
+   * Доверять заголовку `CF-Connecting-IP` (T-050, NFR-05).
+   *
+   * Включается ТОЛЬКО когда origin закрыт для всех, кроме сетей Cloudflare.
+   * Иначе любой, кто достучался до origin напрямую, назовёт себя любым
+   * адресом — и лимит ставок с антинакруткой просмотров начнут верить ему на
+   * слово. По умолчанию выключено: небезопасная настройка не должна
+   * включаться сама.
+   */
+  /**
+   * Секрет Turnstile (ОВ-5, T-050).
+   *
+   * Пусто — работает мок капчи. В production пустое значение роняет старт:
+   * тихий мок на боевом контуре это открытая дверь, а не деградация.
+   */
+  TURNSTILE_SECRET_KEY: z.string().default(''),
+
+  TRUST_CLOUDFLARE_IP: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+
   DATABASE_URL: connectionUrl('DATABASE_URL'),
   /** Без пулера: Prisma нужны DDL и advisory-локи, через PgBouncer они не работают. */
   DIRECT_URL: connectionUrl('DIRECT_URL'),
