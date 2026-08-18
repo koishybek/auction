@@ -565,6 +565,8 @@ function toSnapshotEvent(
     timeRemainingMs: number;
     serverTs: number;
     seq: number;
+    resumeInMs: number | null;
+    winnerBlindId: string | null;
   },
   recentBids: readonly BidUpdatedEvent[],
 ): StateSnapshotEvent {
@@ -580,6 +582,10 @@ function toSnapshotEvent(
     time_remaining_ms: state.timeRemainingMs,
     server_ts: state.serverTs,
     seq: state.seq,
+    // Ключ добавляется условно, а не выставляется в undefined: при
+    // exactOptionalPropertyTypes это разные вещи.
+    ...(state.resumeInMs === null ? {} : { resume_in_ms: state.resumeInMs }),
+    ...(state.winnerBlindId === null ? {} : { winner_blind_id: state.winnerBlindId }),
   };
 }
 

@@ -83,12 +83,16 @@ const READ_TIMERS = `
 ${NOW_MS_LUA}
 local out = { string.format('%.0f', nowMs) }
 for i = 1, #KEYS do
-  local s = redis.call('HMGET', KEYS[i], 'status', 'deadlineMs', 'seq')
+  -- freezeRemainingMs читается вместе с остальным: во время паузы дедлайн
+  -- намеренно не двигается, и остаток, посчитанный из него, продолжал бы
+  -- убывать на экранах участников, пока торги стоят (T-054).
+  local s = redis.call('HMGET', KEYS[i], 'status', 'deadlineMs', 'seq', 'freezeRemainingMs')
   if s[1] then
     out[#out + 1] = KEYS[i]
     out[#out + 1] = s[1]
     out[#out + 1] = s[2]
     out[#out + 1] = s[3]
+    out[#out + 1] = s[4] or ''
   end
 end
 return out
@@ -209,6 +213,24 @@ export interface AuctionState {
   readonly deadlineMs: number;
   /** «Сейчас» по тем же часам — снято одновременно с остальным. */
   readonly nowMs: number;
+  /**
+   * Остаток, замороженный паузой SLA Freeze. `null` — паузы нет.
+   *
+   * Во время паузы `deadlineMs` НЕ двигается и продолжает уезжать в прошлое,
+   * поэтому считать остаток из него нельзя: он утекал бы к нулю, пока торги
+   * стоят. Участнику обещан ровно тот остаток, что был у него в момент
+   * заморозки (ТЗ §2.2), и хранится он отдельным полем.
+   */
+  readonly freezeRemainingMs: number | null;
+  /** Когда пауза кончится, мс эпохи по часам Redis. `null` — паузы нет. */
+  readonly resumeAtMs: number | null;
+  /**
+   * Псевдоним последнего ставившего. В закрытых торгах это победитель.
+   *
+   * Хранится тем же атомарным скриптом, который принимает ставку, поэтому
+   * доступен сразу и не ждёт, пока ставка доедет в PostgreSQL.
+   */
+  readonly lastBlindCode: string | null;
 }
 
 /**
@@ -355,7 +377,7 @@ export class AuctionStateService {
     const nowMs = Number(flat[0]);
     const timers: AuctionTimer[] = [];
 
-    for (let i = 1; i + 3 < flat.length + 1; i += 4) {
+    for (let i = 1; i + 4 <= flat.length; i += 5) {
       const key = flat[i];
       const status = flat[i + 1];
       if (key === undefined || status === undefined) {
@@ -365,13 +387,33 @@ export class AuctionStateService {
         continue;
       }
       const deadlineMs = Number(flat[i + 2] ?? '0');
+      const frozenRemaining = optionalNumber(flat[i + 4]);
+
+      /**
+       * На паузе тик несёт замороженный остаток, а не посчитанный из дедлайна.
+       *
+       * Дедлайн при заморозке не двигается — по нему потом восстанавливается
+       * ход торгов, — поэтому посчитанный из него остаток убывает и на
+       * шестидесятой секунде паузы доходит до нуля. Участник видел бы, как
+       * таймер досчитывает до «00.000» при живых торгах, и решил бы, что всё
+       * кончилось: заморозку он видит баннером, а верит числу (найдено
+       * disconnect-тестом T-054).
+       *
+       * Тик на паузе не отменяется, а исправляется: он ещё и признак жизни
+       * соединения, и по его seq клиент замечает пропущенные ставки.
+       */
+      const timeRemainingMs =
+        status === 'FROZEN' && frozenRemaining !== null
+          ? Math.max(0, frozenRemaining)
+          : // Отрицательного остатка не бывает: «минус три секунды» на экране
+            // означали бы, что торги идут после закрытия.
+            Math.max(0, deadlineMs - nowMs);
+
       timers.push({
         lotId: key.slice(key.lastIndexOf(':') + 1),
         status,
         seq: Number(flat[i + 3] ?? '0'),
-        // Отрицательного остатка не бывает: «минус три секунды» на экране
-        // означали бы, что торги идут после закрытия.
-        timeRemainingMs: Math.max(0, deadlineMs - nowMs),
+        timeRemainingMs,
         nowMs,
       });
     }
@@ -465,5 +507,26 @@ function parseState(flat: readonly string[]): AuctionState {
     seq: Number(map.get('seq') ?? '0'),
     deadlineMs: Number(map.get('deadlineMs') ?? '0'),
     nowMs: Number(map.get('nowMs') ?? '0'),
+    freezeRemainingMs: optionalNumber(map.get('freezeRemainingMs')),
+    resumeAtMs: optionalNumber(map.get('resumeAtMs')),
+    lastBlindCode: optionalText(map.get('lastBlindCode')),
   };
+}
+
+/**
+ * Число из Redis или `null`, если поля нет.
+ *
+ * Именно `null`, а не ноль: ноль остатка означает «время вышло», и подставлять
+ * его вместо «паузы нет» значило бы закрывать торги отсутствием поля.
+ */
+function optionalText(raw: string | undefined): string | null {
+  return raw === undefined || raw === '' ? null : raw;
+}
+
+function optionalNumber(raw: string | undefined): number | null {
+  if (raw === undefined || raw === '') {
+    return null;
+  }
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
 }

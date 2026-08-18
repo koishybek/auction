@@ -95,7 +95,20 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
       return;
     }
     if (event === 'state_snapshot') {
-      set({ hall: applySnapshot(raw as StateSnapshotEvent), connection: 'online' });
+      const snapshot = raw as StateSnapshotEvent;
+      set({
+        hall: applySnapshot(snapshot),
+        connection: 'online',
+        /**
+         * Срок паузы берётся из снимка, а не только из события `sla_freeze`.
+         *
+         * Событие получают лишь те, кто был на связи в момент заморозки.
+         * Вернувшийся после обрыва без этого видел бы остановленный таймер и
+         * ни одного объяснения — баннер паузы строится именно на этой
+         * величине (QA-03, найдено disconnect-тестом T-054).
+         */
+        resumeInMs: snapshot.resume_in_ms ?? null,
+      });
       return;
     }
     if (event === 'bid_updated') {

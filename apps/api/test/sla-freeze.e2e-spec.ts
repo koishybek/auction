@@ -4,10 +4,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
+import { AuctionService } from '../src/auction/auction.service';
 import { AuctionStateService } from '../src/auction/auction-state.service';
 import { BidService } from '../src/auction/bid.service';
 import { FinisherService } from '../src/auction/finisher.service';
-import { SlaFreezeService } from '../src/auction/sla-freeze.service';
+import { FREEZE_DURATION_MS, SlaFreezeService } from '../src/auction/sla-freeze.service';
 import { PrismaService } from '../src/prisma/prisma.service';
 import { RedisService } from '../src/redis/redis.service';
 
@@ -28,6 +29,7 @@ let redis: RedisService;
 let state: AuctionStateService;
 let bids: BidService;
 let freeze: SlaFreezeService;
+let auction: AuctionService;
 let finisher: FinisherService;
 
 /** Торги без лота в БД: механике заморозки нужны только статус и дедлайн. */
@@ -50,6 +52,7 @@ beforeAll(async () => {
   state = app.get(AuctionStateService);
   bids = app.get(BidService);
   freeze = app.get(SlaFreezeService);
+  auction = app.get(AuctionService);
   finisher = app.get(FinisherService);
 });
 
@@ -91,6 +94,80 @@ describe('T-032: SLA Freeze', () => {
     expect(after?.status).toBe('RUNNING');
     const liveRemaining = (after?.deadlineMs ?? 0) - (after?.nowMs ?? 0);
     expect(Math.abs(liveRemaining - frozen.remainingMs)).toBeLessThan(500);
+  });
+
+  /**
+   * Снимок во время паузы (T-054, QA-03).
+   *
+   * До этой проверки снимок считал остаток из дедлайна, а дедлайн при
+   * заморозке намеренно не двигается — он нужен, чтобы потом восстановить ход
+   * торгов. В итоге остаток продолжал утекать, пока торги стоят, и участник,
+   * переподключившийся во время паузы, видел меньшее время, а к концу
+   * шестидесятой секунды — «00.000» на живых торгах.
+   *
+   * Второе: снимок молчал о самой паузе. Событие `sla_freeze` получают только
+   * те, кто был на связи в момент заморозки, поэтому вернувшийся видел
+   * остановленный таймер без единого объяснения.
+   */
+  it('DoD T-054: снимок во время паузы отдаёт замороженный остаток и срок возобновления', async () => {
+    const { lotId } = await openSession();
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+    const frozen = await freeze.freeze(lotId, 'проверка');
+    expect(frozen).not.toBeNull();
+    if (frozen === null) return;
+
+    // Ждём заметно больше тика: именно за это время остаток и «утекал».
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+
+    const during = await auction.snapshot(lotId);
+    expect(during.status).toBe('FROZEN');
+    // Ровно тот остаток, что забрала пауза, — без «сколько прошло по календарю».
+    expect(during.timeRemainingMs).toBe(frozen.remainingMs);
+    expect(during.resumeInMs).not.toBeNull();
+    expect(during.resumeInMs ?? 0).toBeGreaterThan(0);
+    expect(during.resumeInMs ?? 0).toBeLessThanOrEqual(FREEZE_DURATION_MS);
+    // Срок возобновления убывает: это обратный отсчёт, а не константа.
+    expect(during.resumeInMs ?? FREEZE_DURATION_MS).toBeLessThan(FREEZE_DURATION_MS - 2_000);
+
+    await freeze.resume(lotId);
+    const after = await auction.snapshot(lotId);
+    expect(after.status).toBe('RUNNING');
+    // Паузы нет — и полей паузы тоже нет: null здесь означает «не заморожено».
+    expect(after.resumeInMs).toBeNull();
+    expect(Math.abs(after.timeRemainingMs - frozen.remainingMs)).toBeLessThan(500);
+  });
+
+  /**
+   * Тик таймера во время паузы (T-054).
+   *
+   * Отдельно от снимка: снимок участник получает при входе, а тик — каждую
+   * секунду, и именно тик перетирал замороженное значение. Заморозка ставила
+   * остаток из снимка, а следующий тик тут же возвращал убывающий — участник
+   * видел баннер паузы и таймер, досчитывающий до нуля.
+   */
+  it('DoD T-054: тик на паузе несёт замороженный остаток, а не убывающий', async () => {
+    const { lotId } = await openSession();
+    await new Promise((resolve) => setTimeout(resolve, 1_200));
+
+    const frozen = await freeze.freeze(lotId, 'проверка');
+    expect(frozen).not.toBeNull();
+    if (frozen === null) return;
+
+    const first = await state.readTimers([lotId]);
+    expect(first[0]?.status).toBe('FROZEN');
+    expect(first[0]?.timeRemainingMs).toBe(frozen.remainingMs);
+
+    // Через две с половиной секунды паузы остаток обязан быть ТЕМ ЖЕ.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    const later = await state.readTimers([lotId]);
+    expect(later[0]?.timeRemainingMs).toBe(frozen.remainingMs);
+
+    // После возобновления тик снова считает от дедлайна и убывает.
+    await freeze.resume(lotId);
+    const running = await state.readTimers([lotId]);
+    expect(running[0]?.status).toBe('RUNNING');
+    expect(Math.abs((running[0]?.timeRemainingMs ?? 0) - frozen.remainingMs)).toBeLessThan(500);
   });
 
   it('замороженный лот не закрывается finisher-ом', async () => {

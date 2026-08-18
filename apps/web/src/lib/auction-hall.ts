@@ -114,7 +114,9 @@ export function applySnapshot(event: StateSnapshotEvent): HallState {
     timeRemainingMs: event.time_remaining_ms,
     seq: event.seq,
     feed: event.recent_bids.map(entryOf).slice(0, FEED_LIMIT),
-    winnerBlindId: null,
+    // У закрытых торгов победитель приходит снимком: событие о закрытии
+    // получили только те, кто был в комнате в тот момент (T-054).
+    winnerBlindId: event.winner_blind_id ?? null,
   };
 }
 

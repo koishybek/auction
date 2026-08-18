@@ -218,6 +218,20 @@ export class AuctionService {
  * «минус три секунды» на экране означали бы, что торги идут после закрытия.
  */
 function toStateView(lotId: string, state: AuctionState): AuctionStateView {
+  /**
+   * Во время паузы остаток берётся из снимка заморозки, а не из дедлайна.
+   *
+   * `deadlineMs` при заморозке намеренно не двигается — по нему потом
+   * восстанавливается ход торгов. Значит он продолжает уезжать в прошлое, и
+   * посчитанный из него остаток утёк бы к нулю, пока торги стоят. Участник,
+   * переподключившийся во время паузы, увидел бы «00.000» на живых торгах и
+   * решил бы, что всё кончилось (найдено disconnect-тестом T-054).
+   */
+  const frozen = state.status === 'FROZEN' && state.freezeRemainingMs !== null;
+  const timeRemainingMs = frozen
+    ? Math.max(0, state.freezeRemainingMs ?? 0)
+    : Math.max(0, state.deadlineMs - state.nowMs);
+
   return {
     lotId,
     sessionId: state.sessionId,
@@ -225,7 +239,26 @@ function toStateView(lotId: string, state: AuctionState): AuctionStateView {
     currentPriceTenge: Number(toTenge(tiyn(state.priceTiyn))),
     nextBidTenge: Number(toTenge(tiyn(state.nextPriceTiyn))),
     seq: state.seq,
-    timeRemainingMs: Math.max(0, state.deadlineMs - state.nowMs),
+    timeRemainingMs,
     serverTs: state.nowMs,
+    /**
+     * Сколько осталось до конца паузы. Без этого поля вернувшийся участник
+     * получал бы статус FROZEN без единого слова о том, почему таймер стоит:
+     * баннер паузы строится именно на этой величине, а из события `sla_freeze`
+     * она приходит только тем, кто был на связи в момент заморозки.
+     */
+    resumeInMs:
+      frozen && state.resumeAtMs !== null ? Math.max(0, state.resumeAtMs - state.nowMs) : null,
+    /**
+     * Победитель — только у закрытых торгов.
+     *
+     * До закрытия то же поле означало бы «кто сейчас лидирует», а это другое
+     * утверждение: лидер меняется, победитель — нет. Вернувшемуся после
+     * закрытия участнику узнать победителя больше неоткуда: событие
+     * `auction_finished` ушло в комнату, где его уже не было, и без этого поля
+     * ему показывали «ставок не было — покупателя не нашлось». Победителю —
+     * тоже (найдено disconnect-тестом T-054).
+     */
+    winnerBlindId: state.status === 'FINISHED' ? state.lastBlindCode : null,
   };
 }

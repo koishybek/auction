@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
+import { AuctionService } from '../src/auction/auction.service';
 import { AuctionStateService } from '../src/auction/auction-state.service';
 import { BidService } from '../src/auction/bid.service';
 import { FinisherService } from '../src/auction/finisher.service';
@@ -28,6 +29,7 @@ let redis: RedisService;
 let state: AuctionStateService;
 let bids: BidService;
 let finisher: FinisherService;
+let auction: AuctionService;
 
 /** Торги без лота в БД: скрипту завершения нужны только цена, дедлайн и seq. */
 async function openSession(priceTenge = 1_000_000): Promise<{ lotId: string; sessionId: string }> {
@@ -55,6 +57,7 @@ beforeAll(async () => {
   state = app.get(AuctionStateService);
   bids = app.get(BidService);
   finisher = app.get(FinisherService);
+  auction = app.get(AuctionService);
 });
 
 afterAll(async () => {
@@ -186,6 +189,39 @@ describe('T-027: завершение торгов', () => {
     expect(outcome.winnerUserId).toBe('second');
     // 1 000 000 → 1 030 000 → 1 060 900
     expect(outcome.finalPriceTiyn).toBe(106_090_000n);
+  });
+
+  /**
+   * Снимок закрытых торгов (T-054, QA-03).
+   *
+   * До этой проверки снимок не называл победителя вовсе, и участник, который
+   * переподключился после закрытия, получал модалку «ставок не было —
+   * покупателя не нашлось» при живом победителе и сделанных ставках. Тому, кто
+   * выиграл, там же сообщалось, что он не выиграл.
+   */
+  it('DoD T-054: снимок закрытых торгов называет победителя', async () => {
+    const { lotId } = await openSession();
+
+    const outcome = await bids.place({
+      lotId,
+      bidderId: 'bidder-1',
+      blindCode: 'Инвестор #704',
+      expectedAmountTiyn: await bids.nextPriceTiyn(lotId),
+    });
+    expect(outcome.status).toBe('ACCEPTED');
+
+    // Пока торги идут, победителя нет: лидер меняется, победитель — нет.
+    const live = await auction.snapshot(lotId);
+    expect(live.status).toBe('RUNNING');
+    expect(live.winnerBlindId).toBeNull();
+
+    await setDeadline(lotId, Date.now() - 1_000);
+    expect((await finisher.finishLot(lotId)).kind).toBe('FINISHED');
+
+    const closed = await auction.snapshot(lotId);
+    expect(closed.status).toBe('FINISHED');
+    expect(closed.winnerBlindId).toBe('Инвестор #704');
+    expect(closed.timeRemainingMs).toBe(0);
   });
 
   it('торги без единой ставки закрываются без победителя', async () => {

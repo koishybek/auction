@@ -165,6 +165,28 @@ describe('T-039: состояние зала', () => {
     expect(resynced.feed).toHaveLength(0);
   });
 
+  it('DoD T-054: снимок закрытых торгов приносит победителя', () => {
+    // Событие о закрытии получили те, кто был в комнате. Вернувшемуся победителя
+    // называет снимок — иначе ему покажут «ставок не было» при живом победителе,
+    // а самому победителю сообщат, что он не выиграл.
+    const state = applySnapshot(
+      snapshot({
+        status: 'FINISHED',
+        time_remaining_ms: 0,
+        current_price_kzt: 46_350_000,
+        winner_blind_id: 'Инвестор #704',
+      }),
+    );
+
+    expect(state.status).toBe('FINISHED');
+    expect(state.winnerBlindId).toBe('Инвестор #704');
+  });
+
+  it('в идущих торгах победителя в снимке нет', () => {
+    // Лидер меняется, победитель — нет: до закрытия это разные утверждения.
+    expect(applySnapshot(snapshot()).winnerBlindId).toBeNull();
+  });
+
   it('тик двигает только остаток, а пропуск номера требует пересинка', () => {
     const state = applySnapshot(snapshot());
 
