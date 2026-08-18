@@ -61,8 +61,13 @@ jobs:
       - name: Проверка типов
         run: pnpm typecheck
 
+      # Весь воркспейс, а не только api. До T-055 здесь стояло
+      # `--filter @auction/api`, и юнит-тесты apps/web не запускались в CI ни
+      # разу: клиентская логика ресинка (снимок, тик, заморозка, победитель),
+      # поведенческий антибот и виджет задатка проверяются именно там, и их
+      # регресс проходил бы мимо CI молча.
       - name: Юнит-тесты
-        run: pnpm --filter @auction/api test
+        run: pnpm test
 
       # Правила Prometheus проверяются здесь, а не на инциденте: алерт, который
       # никто не проверял, — это пожелание, а не защита (T-053). Тем же файлом
@@ -176,10 +181,90 @@ jobs:
       - name: Гонка ставок, 100 прогонов (QA-02)
         run: pnpm --filter @auction/load race
 
+  browser:
+    name: Браузерная приёмка (QA-03/QA-04)
+    runs-on: ubuntu-latest
+
+    # Единственное место, где приёмочные сценарии проверяются так, как их
+    # увидит участник: обрыв связи во всех статусах, модалка завершения у всех
+    # клиентов комнаты, подмена суммы через консоль. До T-055 набор запускался
+    # только руками — то есть регресс ресинка не поймал бы никто.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: auction
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/auction
+      DIRECT_URL: postgresql://postgres:postgres@127.0.0.1:5432/auction
+      REDIS_URL: redis://127.0.0.1:6379
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: Одноразовые ключи прогона
+        run: |
+          gen32() { node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"; }
+          {
+            echo "PII_ENCRYPTION_KEY=$(gen32)"
+            echo "PII_BLIND_INDEX_KEY=$(gen32)"
+            echo "JWT_ACCESS_SECRET=$(gen32)"
+            echo "JWT_REFRESH_SECRET=$(gen32)"
+          } >> "$GITHUB_ENV"
+
+      - name: Установка зависимостей
+        run: pnpm install --frozen-lockfile
+
+      - name: Генерация клиента Prisma
+        run: pnpm db:generate
+
+      - name: Установка Chromium
+        run: pnpm --filter @auction/e2e exec playwright install --with-deps chromium
+
+      # Стенд собирает и поднимает сам набор (e2e/prepare.ts + webServer
+      # Playwright): база, миграции, сборка воркспейса, три процесса.
+      - name: Приёмка в браузере
+        run: pnpm test:browser
+
+      # Следы падений: без них разбор упавшего сценария в CI сводится к
+      # угадыванию, а видео и трассировка Playwright уже записаны.
+      - name: Следы упавших сценариев
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: e2e/test-results
+          retention-days: 7
+
   images:
     name: Сборка образов
     runs-on: ubuntu-latest
-    needs: [quality, e2e]
+    needs: [quality, e2e, browser]
     permissions:
       contents: read
       packages: write

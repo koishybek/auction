@@ -25,6 +25,35 @@ export const DEGRADED_RTT_MS = 2_000;
 export const FREEZE_DURATION_MS = 60_000;
 
 /**
+ * Плохая ли связь у одного соединения (ТЗ §2.2).
+ *
+ * Отдельной чистой функцией, потому что здесь легко получить проверку, которая
+ * не срабатывает никогда, и не заметить этого: до T-055 «ответа нет дольше
+ * порога» считалось от времени отправки ping, которое обновлялось прямо перед
+ * проверкой, — то есть всегда «сейчас». Заморозка при этом опиралась на
+ * задержку ответа, а та у медленного клиента занижалась на целый такт
+ * heartbeat, и участник с реальными 2.5 с выглядел здоровым.
+ *
+ * Три признака, любой достаточен:
+ *   — на самый ранний неотвеченный ping ответа нет дольше порога;
+ *   — последняя измеренная задержка хуже порога;
+ *   — подряд пропущено больше одного такта.
+ */
+export function isDegradedLink(input: {
+  readonly nowMs: number;
+  readonly pendingPingAt: number | null;
+  readonly rttMs: number | null;
+  readonly missedPongs: number;
+}): boolean {
+  const waitingMs = input.pendingPingAt === null ? 0 : input.nowMs - input.pendingPingAt;
+  return (
+    waitingMs > DEGRADED_RTT_MS ||
+    (input.rttMs !== null && input.rttMs > DEGRADED_RTT_MS) ||
+    input.missedPongs > 1
+  );
+}
+
+/**
  * SLA Freeze (T-032, FR-08).
  *
  * Смысл механизма — не наказать участников за плохую связь, а не дать

@@ -177,31 +177,69 @@ export class PaymentsService {
       return 0;
     }
 
-    const orders: SplitPart[] = [
-      {
-        iban: PLATFORM_ACCOUNT_IBAN,
-        kbe: KBE_LEGAL_ENTITY,
-        amountTiyn: parts.feeTiyn,
-        purpose: `Комиссия платформы 5 % по лоту ${payment.lotId}`,
-      },
-      {
-        iban: LIEN_ACCOUNT_IBAN,
-        kbe: KBE_LEGAL_ENTITY,
-        amountTiyn: parts.bankDebtTiyn,
-        purpose: `Погашение задолженности залогодержателю по лоту ${payment.lotId}`,
-      },
-      {
-        iban: SELLER_ACCOUNT_IBAN,
-        kbe: KBE_LEGAL_ENTITY,
-        amountTiyn: parts.sellerRestTiyn,
-        purpose: `Расчёт с продавцом по лоту ${payment.lotId}`,
-      },
-    ].filter((order) => order.amountTiyn > 0n);
+    // Вид доли идёт рядом с поручением, а не отдельным списком: нулевые
+    // поручения в банк не уходят, и после фильтра порядок в списке перестаёт
+    // совпадать с порядком строк в базе.
+    type PayoutOrder = { kind: 'FEE_5PCT' | 'BANK_DEBT' | 'SELLER_REST'; part: SplitPart };
+    const orders: PayoutOrder[] = (
+      [
+        {
+          kind: 'FEE_5PCT',
+          part: {
+            iban: PLATFORM_ACCOUNT_IBAN,
+            kbe: KBE_LEGAL_ENTITY,
+            amountTiyn: parts.feeTiyn,
+            purpose: `Комиссия платформы 5 % по лоту ${payment.lotId}`,
+          },
+        },
+        {
+          kind: 'BANK_DEBT',
+          part: {
+            iban: LIEN_ACCOUNT_IBAN,
+            kbe: KBE_LEGAL_ENTITY,
+            amountTiyn: parts.bankDebtTiyn,
+            purpose: `Погашение задолженности залогодержателю по лоту ${payment.lotId}`,
+          },
+        },
+        {
+          kind: 'SELLER_REST',
+          part: {
+            iban: SELLER_ACCOUNT_IBAN,
+            kbe: KBE_LEGAL_ENTITY,
+            amountTiyn: parts.sellerRestTiyn,
+            purpose: `Расчёт с продавцом по лоту ${payment.lotId}`,
+          },
+        },
+      ] satisfies PayoutOrder[]
+    ).filter((order) => order.part.amountTiyn > 0n);
 
-    const result = await this.bank.split({ reference: paymentId, parts: orders });
+    const result = await this.bank.split({
+      reference: paymentId,
+      parts: orders.map((order) => order.part),
+    });
+
+    /**
+     * У каждой доли свой идентификатор перевода.
+     *
+     * Банк возвращает `partIds` — по одному на часть, в том же порядке, что
+     * пришли поручения. Раньше во все три строки писался общий `splitId`, и при
+     * отказе одного перевода из трёх сверить его с банковской выпиской было
+     * нечем: у отклонённого и у прошедших один и тот же номер. Спор о неполученных
+     * деньгах продавца разбирается именно по номеру операции.
+     */
+    for (const [index, order] of orders.entries()) {
+      await this.prisma.payoutSplit.updateMany({
+        where: { paymentId, kind: order.kind },
+        data: { status: 'SENT', bankRef: result.partIds[index] ?? result.splitId },
+      });
+    }
+
+    // Нулевая доля в банк не уходила, поручения у неё нет — и номера операции
+    // тоже. Статус всё равно закрывается: строка не должна висеть в ожидании
+    // перевода, которого не будет.
     await this.prisma.payoutSplit.updateMany({
-      where: { paymentId },
-      data: { status: 'SENT', bankRef: result.splitId },
+      where: { paymentId, status: 'PENDING' },
+      data: { status: 'SENT' },
     });
 
     this.logger.log(

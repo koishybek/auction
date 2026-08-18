@@ -30,6 +30,25 @@ import {
 const RECONNECT_DELAYS_MS = [500, 1_000, 2_000, 5_000, 10_000];
 
 /**
+ * Разброс задержки переподключения, доля от неё.
+ *
+ * Обрыв у одного клиента — это его сеть. Обрыв у зала — это выкат gateway,
+ * падение инстанса или моргнувший периметр, и тогда все клиенты лота считают
+ * задержку от одного и того же момента. Без разброса тридцать тысяч соединений
+ * возвращаются одной секундой, каждое со снимком состояния и историей ставок, —
+ * то есть выкат сам себе устраивает нагрузочный тест в момент, когда система
+ * только что потеряла половину мощности.
+ */
+const RECONNECT_JITTER = 0.3;
+
+/** Задержка со случайным разбросом ±30 %: возвращаются вразнобой, а не строем. */
+export function reconnectDelayMs(attempt: number): number {
+  const base = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 10_000;
+  const spread = base * RECONNECT_JITTER;
+  return Math.round(base - spread + Math.random() * spread * 2);
+}
+
+/**
  * Сколько терпим тишину в сокете, прежде чем считать связь оборванной.
  *
  * Сервер шлёт ping раз в 2 с и тик таймера раз в 1 с (ТЗ §2.1–2.2), поэтому
@@ -253,7 +272,7 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
     if (currentLot === null || reconnectTimer !== null) {
       return;
     }
-    const delay = RECONNECT_DELAYS_MS[Math.min(attempt, RECONNECT_DELAYS_MS.length - 1)] ?? 10_000;
+    const delay = reconnectDelayMs(attempt);
     attempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;

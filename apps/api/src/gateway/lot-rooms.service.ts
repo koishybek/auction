@@ -9,6 +9,17 @@ import { RedisService } from '../redis/redis.service';
 export interface RoomMember {
   readonly id: string;
   send(payload: string): void;
+  /**
+   * Жив ли ещё сокет.
+   *
+   * Нужен из-за одного окна: вход в НОВУЮ комнату ждёт подписки на канал Redis,
+   * и за это время соединение может закрыться. Уборка при обрыве в этот момент
+   * участника в комнате ещё не находит, а после подписки он в неё добавляется —
+   * и остаётся там навсегда: комната никогда не опустеет, канал не отпишется, а
+   * тик таймера будет рассылаться лоту, которого никто не смотрит. Реализация
+   * необязательна: тестовому участнику проверять нечего.
+   */
+  isAlive?(): boolean;
 }
 
 /**
@@ -77,6 +88,18 @@ export class LotRoomsService implements OnModuleDestroy {
       room = new Set<RoomMember>();
       this.rooms.set(lotId, room);
       await this.subscriber.subscribe(this.bids.channel(lotId));
+
+      // Пока шла подписка, соединение могло закрыться. Добавить его сейчас
+      // значит оставить мёртвого участника в комнате навсегда: уборка при
+      // обрыве его уже не искала, а комната без живых участников не опустеет и
+      // не отпишется от канала.
+      if (member.isAlive?.() === false) {
+        if (room.size === 0) {
+          this.rooms.delete(lotId);
+          await this.subscriber.unsubscribe(this.bids.channel(lotId));
+        }
+        return;
+      }
     }
     room.add(member);
   }

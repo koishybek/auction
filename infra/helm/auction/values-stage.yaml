@@ -8,6 +8,18 @@ api:
   env:
     NODE_ENV: production
     LOG_PRETTY: 'false'
+    # Один хоп: голый ingress-nginx, Cloudflare ещё не подключён (T-050).
+    # Значение зависит от топологии, а не от окружения: появится Cloudflare —
+    # станет два, иначе адрес клиента будет браться из подделываемой части
+    # X-Forwarded-For.
+    TRUST_PROXY_HOPS: '1'
+
+gateway:
+  replicaCount: 1
+  env:
+    NODE_ENV: production
+    LOG_PRETTY: 'false'
+    TRUST_PROXY_HOPS: '1'
 
 web:
   replicaCount: 1

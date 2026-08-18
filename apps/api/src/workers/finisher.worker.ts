@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@ne
 
 import { FinisherService } from '../auction/finisher.service';
 import { SlaFreezeService } from '../auction/sla-freeze.service';
+import { MetricsService } from '../metrics/metrics.service';
 import { TimeService } from '../time/time.service';
 
 /**
@@ -12,6 +13,15 @@ import { TimeService } from '../time/time.service';
  * ZRANGEBYSCORE: при пустом индексе она не делает вообще ничего.
  */
 const SWEEP_MS = 250;
+
+/**
+ * Как часто дозакрываются финиши, не доехавшие в PostgreSQL.
+ *
+ * Реже основного прохода: это путь на случай сбоя базы, а не штатный. Пять
+ * секунд — потому что на незафиксированном финише стоят возвраты задатков и
+ * протокол торгов, и держать их часами нельзя.
+ */
+const RETRY_MS = 5_000;
 
 /**
  * Воркер завершения торгов (T-027).
@@ -27,12 +37,15 @@ const SWEEP_MS = 250;
 export class FinisherWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(FinisherWorker.name);
   private timer: NodeJS.Timeout | null = null;
+  private retryTimer: NodeJS.Timeout | null = null;
   private running = false;
+  private retrying = false;
 
   constructor(
     private readonly finisher: FinisherService,
     private readonly freeze: SlaFreezeService,
     private readonly time: TimeService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit(): void {
@@ -40,13 +53,46 @@ export class FinisherWorker implements OnModuleInit, OnModuleDestroy {
       void this.sweep();
     }, SWEEP_MS);
     this.timer.unref();
+    this.retryTimer = setInterval(() => {
+      void this.retry();
+    }, RETRY_MS);
+    this.retryTimer.unref();
     this.logger.log(`Finisher поднят: проверка дедлайнов каждые ${String(SWEEP_MS)} мс`);
   }
 
   onModuleDestroy(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer);
-      this.timer = null;
+    for (const timer of [this.timer, this.retryTimer]) {
+      if (timer !== null) {
+        clearInterval(timer);
+      }
+    }
+    this.timer = null;
+    this.retryTimer = null;
+  }
+
+  /**
+   * Дозакрыть финиши, не доехавшие в PostgreSQL, и отдать их число в метрику.
+   *
+   * Метрика важна не меньше самой попытки: если дозакрыть не удаётся, число
+   * держится ненулевым — и это единственный способ узнать, что у лота нет
+   * ни возврата задатков, ни протокола.
+   */
+  async retry(): Promise<number> {
+    if (this.retrying) {
+      return 0;
+    }
+    this.retrying = true;
+    try {
+      const fixed = await this.finisher.retryUnpersisted();
+      this.metrics.setFinishUnpersisted(await this.finisher.unpersistedCount());
+      return fixed;
+    } catch (error) {
+      this.logger.error(
+        `Дозакрытие финишей не удалось: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
+    } finally {
+      this.retrying = false;
     }
   }
 

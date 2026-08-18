@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 320" width="840" height="320" font-family="ui-sans-serif, system-ui, 'Segoe UI', sans-serif" role="img" aria-label="QA-01 · зал под нагрузкой">
+<rect width="840" height="320" fill="#ffffff"/>
+<text x="56" y="30" font-size="17" font-weight="600" fill="#111827">QA-01 · зал под нагрузкой</text>
+<text x="56" y="50" font-size="12.5" fill="#6b7280">gateway: соединения и крупнейшая комната лота, снимок каждые 2 с (максимум 500)</text><line x1="56" y1="74" x2="720" y2="74" stroke="#e5e7eb" stroke-width="1"/>
+<text x="48" y="78" font-size="10.5" fill="#6b7280" text-anchor="end">500</text><line x1="56" y1="124" x2="720" y2="124" stroke="#e5e7eb" stroke-width="1"/>
+<text x="48" y="128" font-size="10.5" fill="#6b7280" text-anchor="end">375</text><line x1="56" y1="174" x2="720" y2="174" stroke="#e5e7eb" stroke-width="1"/>
+<text x="48" y="178" font-size="10.5" fill="#6b7280" text-anchor="end">250</text><line x1="56" y1="224" x2="720" y2="224" stroke="#e5e7eb" stroke-width="1"/>
+<text x="48" y="228" font-size="10.5" fill="#6b7280" text-anchor="end">125</text><line x1="56" y1="274" x2="720" y2="274" stroke="#e5e7eb" stroke-width="1"/>
+<text x="48" y="278" font-size="10.5" fill="#6b7280" text-anchor="end">0</text><path d="M56.0,274.0 L125.0,266.8 L149.4,240.0 L173.8,213.6 L198.1,186.8 L222.5,160.0 L246.9,133.2 L271.3,106.0 L295.7,79.6 L319.9,74.0 L344.3,74.0 L368.6,74.0 L393.0,74.0 L417.3,74.0 L441.8,74.0 L466.2,74.0 L490.5,74.0 L514.8,74.0 L539.1,74.0 L563.3,74.0 L587.6,74.0 L611.9,74.0 L636.3,92.8 L660.7,119.6 L685.1,141.2 L709.5,221.2 L720.0,274.0" fill="none" stroke="#0f766e" stroke-width="2.2" stroke-linejoin="round"/><circle cx="720.0" cy="274.0" r="3" fill="#0f766e"/>
+<text x="730" y="88" font-size="11.5" fill="#0f766e">■ соединения</text><path d="M56.0,274.0 L125.0,267.2 L149.4,240.4 L173.8,213.6 L198.1,186.8 L222.5,160.0 L246.9,133.2 L271.3,106.4 L295.7,79.6 L319.9,74.0 L344.3,74.0 L368.6,74.0 L393.0,74.0 L417.3,74.0 L441.8,74.0 L466.2,74.0 L490.5,74.0 L514.8,74.0 L539.1,74.0 L563.3,74.0 L587.6,74.0 L611.9,74.0 L636.3,92.8 L660.7,119.6 L685.1,141.2 L709.5,221.2 L720.0,274.0" fill="none" stroke="#b45309" stroke-width="2.2" stroke-linejoin="round"/><circle cx="720.0" cy="274.0" r="3" fill="#b45309"/>
+<text x="730" y="108" font-size="11.5" fill="#b45309">■ крупнейшая комната</text><text x="56" y="308" font-size="11" fill="#6b7280">0 c</text>
+<text x="720" y="308" font-size="11" fill="#6b7280" text-anchor="end">55 c</text>
+</svg>

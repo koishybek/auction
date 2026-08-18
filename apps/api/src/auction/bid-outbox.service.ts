@@ -1,7 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 
+import { MetricsService } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { TimeService } from '../time/time.service';
 
 import { BidService } from './bid.service';
 
@@ -36,6 +38,14 @@ interface OutboxEntry {
  * От повторов защищает сама база — уникальный ключ (session_id, seq). Она же
  * гарантирует, что двух ставок с одним номером в сессии не существует, даже
  * если что-то пробьётся мимо Lua-скрипта.
+ *
+ * Одна неисправимая запись НЕ останавливает перенос. Пачка пишется одним
+ * `createMany`, и запись, которая не проходит по внешнему ключу, валит всю
+ * пачку целиком: она повторяется бесконечно, а новые ставки не доезжают в
+ * PostgreSQL вообще. Выглядит это как «лента пустая», и заметить это без
+ * метрики нельзя. Поэтому упавшая пачка разбирается по одной, а запись, которая
+ * не проходит и в одиночку, уходит в поток карантина: она не теряется, но и не
+ * держит остальные. Карантин обязан быть виден — на него стоит алерт.
  */
 @Injectable()
 export class BidOutboxService {
@@ -46,6 +56,8 @@ export class BidOutboxService {
     private readonly redis: RedisService,
     private readonly bids: BidService,
     private readonly prisma: PrismaService,
+    private readonly metrics: MetricsService,
+    private readonly time: TimeService,
   ) {}
 
   /**
@@ -66,8 +78,9 @@ export class BidOutboxService {
       return 0;
     }
 
-    const written = await this.persist(entries);
+    const { written, quarantined } = await this.persist(entries);
     await this.redis.client.xack(this.bids.outboxKey(), GROUP, ...entries.map((e) => e.id));
+    this.metrics.observeOutboxDrain({ written, quarantined });
     return written;
   }
 
@@ -76,6 +89,16 @@ export class BidOutboxService {
     await this.ensureGroup();
     const info = await this.redis.client.xpending(this.bids.outboxKey(), GROUP);
     return Array.isArray(info) ? Number(info[0] ?? 0) : 0;
+  }
+
+  /** Ключ потока карантина. Отдельный от рабочего: разбирает его человек. */
+  deadKey(): string {
+    return this.redis.key('bids', 'outbox', 'dead');
+  }
+
+  /** Сколько ставок лежит в карантине. Ноль — норма, всё прочее требует разбора. */
+  async deadCount(): Promise<number> {
+    return await this.redis.client.xlen(this.deadKey());
   }
 
   private async ensureGroup(): Promise<void> {
@@ -130,33 +153,108 @@ export class BidOutboxService {
   /**
    * Записать пачкой. `skipDuplicates` опирается на уникальный (session_id, seq):
    * повторно доставленная ставка молча отбрасывается, а не ломает перенос.
+   *
+   * Упавшая пачка не бросается наружу: одна плохая запись валит `createMany`
+   * целиком, и повтор пачки даёт тот же результат вечно. Разбираем по одной —
+   * хорошие ставки доезжают, плохая уходит в карантин.
    */
-  private async persist(entries: readonly OutboxEntry[]): Promise<number> {
+  private async persist(
+    entries: readonly OutboxEntry[],
+  ): Promise<{ written: number; quarantined: number }> {
     try {
       const result = await this.prisma.bid.createMany({
-        data: entries.map((entry) => ({
-          lotId: entry.lotId,
-          sessionId: entry.sessionId,
-          userId: entry.userId,
-          amountTiyn: entry.amountTiyn,
-          seq: entry.seq,
-          blindCode: entry.blindCode,
-          serverTs: new Date(entry.serverTs),
-        })),
+        data: entries.map((entry) => rowOf(entry)),
         skipDuplicates: true,
       });
-      return result.count;
+      return { written: result.count, quarantined: 0 };
     } catch (error) {
-      // Пачка не записалась целиком — например, ставка ссылается на
-      // несуществующего пользователя. Молчать нельзя: это расхождение между
-      // тем, что увидели участники, и тем, что осталось в базе.
-      this.logger.error(
-        `Не удалось записать ${String(entries.length)} ставок: ` +
-          (error instanceof Error ? error.message : String(error)),
+      this.logger.warn(
+        `Пачка из ${String(entries.length)} ставок не записалась целиком ` +
+          `(${error instanceof Error ? error.message : String(error)}) — разбираю по одной`,
       );
-      throw error;
+      return await this.persistOneByOne(entries);
     }
   }
+
+  /** По одной: виновата обычно одна запись, а не пачка. */
+  private async persistOneByOne(
+    entries: readonly OutboxEntry[],
+  ): Promise<{ written: number; quarantined: number }> {
+    let written = 0;
+    let quarantined = 0;
+    for (const entry of entries) {
+      try {
+        const result = await this.prisma.bid.createMany({
+          data: [rowOf(entry)],
+          skipDuplicates: true,
+        });
+        written += result.count;
+      } catch (error) {
+        await this.quarantine(entry, error);
+        quarantined += 1;
+      }
+    }
+    return { written, quarantined };
+  }
+
+  /**
+   * Убрать запись в карантин.
+   *
+   * Не удалить: ставку видели участники, и след обязан остаться — поток
+   * карантина хранит её поля целиком плюс причину отказа базы. Дальше её
+   * разбирает человек, а метрика `auction_bid_outbox_dead` не даёт про неё
+   * забыть.
+   */
+  private async quarantine(entry: OutboxEntry, error: unknown): Promise<void> {
+    const reason = error instanceof Error ? error.message : String(error);
+    await this.redis.client.xadd(
+      this.deadKey(),
+      '*',
+      'lotId',
+      entry.lotId,
+      'sessionId',
+      entry.sessionId,
+      'userId',
+      entry.userId,
+      'amountTiyn',
+      entry.amountTiyn.toString(),
+      'seq',
+      String(entry.seq),
+      'blindCode',
+      entry.blindCode,
+      'serverTs',
+      String(entry.serverTs),
+      // Причина обрезается: сообщения Prisma содержат весь запрос целиком.
+      'reason',
+      reason.slice(0, 500),
+      'quarantinedAt',
+      String(this.time.wallClockMs()),
+    );
+    this.logger.error(
+      `Ставка №${String(entry.seq)} лота ${entry.lotId} убрана в карантин: ${reason}`,
+    );
+  }
+}
+
+/** Строка таблицы `bids` из записи потока. */
+function rowOf(entry: OutboxEntry): {
+  lotId: string;
+  sessionId: string;
+  userId: string;
+  amountTiyn: bigint;
+  seq: number;
+  blindCode: string;
+  serverTs: Date;
+} {
+  return {
+    lotId: entry.lotId,
+    sessionId: entry.sessionId,
+    userId: entry.userId,
+    amountTiyn: entry.amountTiyn,
+    seq: entry.seq,
+    blindCode: entry.blindCode,
+    serverTs: new Date(entry.serverTs),
+  };
 }
 
 function parseEntries(raw: unknown): OutboxEntry[] {

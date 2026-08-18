@@ -306,6 +306,118 @@
           "datasource": { "type": "prometheus", "uid": "${datasource}" }
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "row",
+      "title": "Перенос ставок в PostgreSQL (FR-04)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 35 },
+      "collapsed": false
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Очередь переноса и карантин",
+      "description": "Ставку принимает Redis, юридической записью она становится в PostgreSQL. Пока очередь не разгружается, в зале всё выглядит нормально, а протокол торгов соберётся неполным. Карантин — ставки, которые база отказалась принять: сами они уже не запишутся.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 36 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "в карантине" },
+            "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }]
+          }
+        ]
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(auction_bid_outbox_pending)",
+          "legendFormat": "ждут записи",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(auction_bid_outbox_dead)",
+          "legendFormat": "в карантине",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" }
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Ставок записано в секунду",
+      "description": "Сверять с потоком принятых ставок: расхождение означает, что часть ставок висит в очереди или ушла в карантин.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 36 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(auction_bid_outbox_written_total[5m]))",
+          "legendFormat": "записано",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" }
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(auction_bid_outbox_quarantined_total[5m]))",
+          "legendFormat": "в карантин",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" }
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Закрытые торги без записи в базе",
+      "description": "Скрипт закрытия необратимо снимает лот с индекса дедлайнов. Если запись в PostgreSQL после этого не удалась, у лота нет ни возврата задатков, ни протокола, а в каталоге он выглядит нормально закрытым. Ноль — норма.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 36 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(auction_finish_unpersisted)",
+          "legendFormat": "ждут фиксации",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" }
+        }
+      ]
     }
   ]
 }

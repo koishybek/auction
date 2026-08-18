@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 
 import { BankProviderModule } from '../integrations/bank/bank.module';
+import { PartnersModule } from '../partners/partners.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { TimeModule } from '../time/time.module';
 
@@ -19,7 +20,14 @@ import { RunnerUpService } from './runner-up.service';
  * участник (CLAUDE.md, раздел 3).
  */
 @Module({
-  imports: [PrismaModule, TimeModule, BankProviderModule],
+  imports: [
+    PrismaModule,
+    TimeModule,
+    BankProviderModule,
+    // Ради бонуса партнёра: сверка закрытых лотов дозакрывает и его — тем же
+    // заходом, что и возвраты (T-055).
+    PartnersModule,
+  ],
   controllers: [DepositsController],
   providers: [DepositsService, DepositPaymentsService, RefundService, RunnerUpService],
   exports: [DepositsService, DepositPaymentsService, RefundService, RunnerUpService],

@@ -73,6 +73,27 @@ export class MetricsService {
   private readonly rooms: Gauge<never>;
   private readonly largestRoom: Gauge<never>;
 
+  /**
+   * Перенос ставок Redis → PostgreSQL.
+   *
+   * Без этих четырёх чисел остановка переноса не видна ниоткуда: торги идут,
+   * лента в зале живая, а в юридической записи ставок нет — и узнают об этом,
+   * когда придут за протоколом. `pending` показывает, разгружается ли очередь,
+   * `dead` — есть ли ставки, которые уже не запишутся сами.
+   */
+  private readonly outboxPending: Gauge<never>;
+  private readonly outboxDead: Gauge<never>;
+  private readonly outboxWritten: Counter<never>;
+  private readonly outboxQuarantined: Counter<never>;
+
+  /**
+   * Торги, закрытые в Redis и не зафиксированные в PostgreSQL.
+   *
+   * Ненулевое значение означает лот, у которого нет ни возврата задатков, ни
+   * протокола: и то и другое ищут сессию со статусом FINISHED в базе.
+   */
+  private readonly finishUnpersisted: Gauge<never>;
+
   constructor() {
     /**
      * Стандартные метрики процесса: CPU, память, GC, задержка event loop.
@@ -137,6 +158,36 @@ export class MetricsService {
       help: 'Соединений в самой большой комнате: по ней проверяется запас до 50 000 (NFR-03)',
       registers: [this.registry],
     });
+
+    this.outboxPending = new Gauge({
+      name: 'auction_bid_outbox_pending',
+      help: 'Принятых ставок ждёт переноса в PostgreSQL: не разгружается — значит перенос встал',
+      registers: [this.registry],
+    });
+
+    this.outboxDead = new Gauge({
+      name: 'auction_bid_outbox_dead',
+      help: 'Ставок в карантине: участники их видели, а в юридической записи их нет',
+      registers: [this.registry],
+    });
+
+    this.outboxWritten = new Counter({
+      name: 'auction_bid_outbox_written_total',
+      help: 'Ставок перенесено в PostgreSQL',
+      registers: [this.registry],
+    });
+
+    this.outboxQuarantined = new Counter({
+      name: 'auction_bid_outbox_quarantined_total',
+      help: 'Ставок убрано в карантин: запись не удалась и повтор её не исправит',
+      registers: [this.registry],
+    });
+
+    this.finishUnpersisted = new Gauge({
+      name: 'auction_finish_unpersisted',
+      help: 'Торгов закрыто в Redis, но не зафиксировано в PostgreSQL: нет ни возвратов, ни протокола',
+      registers: [this.registry],
+    });
   }
 
   /** Полный путь ставки. Секунды, потому что Prometheus меряет в секундах. */
@@ -173,6 +224,33 @@ export class MetricsService {
     this.connections.set(input.connections);
     this.rooms.set(input.rooms);
     this.largestRoom.set(input.largestRoom);
+  }
+
+  /** Итог одного захода переноса ставок. */
+  observeOutboxDrain(input: { written: number; quarantined: number }): void {
+    if (input.written > 0) {
+      this.outboxWritten.inc(input.written);
+    }
+    if (input.quarantined > 0) {
+      this.outboxQuarantined.inc(input.quarantined);
+    }
+  }
+
+  /**
+   * Глубина очереди переноса. Обновляется реже, чем идёт разбор.
+   *
+   * Считается вне захода, поэтому у здорового переноса читается ноль:
+   * подтверждение идёт сразу за записью. Ненулевое значение, которое не
+   * обнуляется, и есть признак остановки.
+   */
+  setOutboxDepth(input: { pending: number; dead: number }): void {
+    this.outboxPending.set(input.pending);
+    this.outboxDead.set(input.dead);
+  }
+
+  /** Сколько закрытых лотов ждут фиксации в PostgreSQL. Норма — ноль. */
+  setFinishUnpersisted(count: number): void {
+    this.finishUnpersisted.set(count);
   }
 
   /** Текст в формате экспозиции Prometheus. */

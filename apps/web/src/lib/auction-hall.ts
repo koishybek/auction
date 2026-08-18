@@ -63,6 +63,18 @@ export interface HallState {
   readonly currentPriceTenge: number;
   /** Сумма следующей ставки — ровно её показывает кнопка и она же уходит на сервер. */
   readonly nextPriceTenge: number;
+  /**
+   * Размер СЛЕДУЮЩЕГО шага: `nextPriceTenge - currentPriceTenge`.
+   *
+   * Одно значение с одним смыслом, независимо от того, чем оно пришло. В
+   * событиях сервера поле `bid_step_kzt` означает разное: в снимке состояния —
+   * размер следующего шага, в `bid_updated` — шаг уже сделанной ставки,
+   * посчитанный от прежней цены. Оба числа верны, но про разное, и раньше они
+   * попадали сюда по очереди: после переподключения «шаг» на экране менялся,
+   * хотя цена не двигалась. Шаг каждой отдельной ставки живёт в своей строке
+   * ленты (`FeedEntry.stepTenge`) — там он и означает «на сколько шагнула эта
+   * ставка».
+   */
   readonly stepTenge: number;
   readonly timeRemainingMs: number;
   readonly seq: number;
@@ -140,7 +152,9 @@ export function applyBid(state: HallState, event: BidUpdatedEvent): HallState {
     ...state,
     status: 'RUNNING',
     currentPriceTenge: event.current_price_kzt,
-    stepTenge: event.bid_step_kzt,
+    // Не `event.bid_step_kzt`: то шаг УЖЕ сделанной ставки от прежней цены, а
+    // здесь смысл поля — размер следующего шага (см. HallState.stepTenge).
+    stepTenge: event.next_price_kzt - event.current_price_kzt,
     nextPriceTenge: event.next_price_kzt,
     timeRemainingMs: event.time_remaining_ms,
     seq: event.seq,

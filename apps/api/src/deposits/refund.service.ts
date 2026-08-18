@@ -2,11 +2,13 @@ import { randomUUID } from 'node:crypto';
 
 import { Injectable, Logger } from '@nestjs/common';
 
+import { RefBonusService } from '../partners/ref-bonus.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
 import { DepositPaymentsService } from './deposit-payments.service';
 import { DepositsService } from './deposits.service';
+import { RunnerUpService } from './runner-up.service';
 
 /**
  * За один заход отправляем не больше этого числа поручений.
@@ -51,6 +53,8 @@ export class RefundService {
     private readonly payments: DepositPaymentsService,
     private readonly deposits: DepositsService,
     private readonly time: TimeService,
+    private readonly runnerUp: RunnerUpService,
+    private readonly refBonus: RefBonusService,
   ) {}
 
   /** Отправить поручения по задаткам, ждущим возврата. Возвращает число отправленных. */
@@ -132,19 +136,25 @@ export class RefundService {
         finishedAt: { lt: cutoff },
         lot: { deposits: { some: { status: 'ON_SPECIAL_ACCOUNT' } } },
       },
-      select: { id: true, lotId: true },
+      select: { id: true, lotId: true, finishedAt: true },
       take: BATCH_SIZE,
     });
 
     let opened = 0;
     for (const session of forgotten) {
-      const top = await this.prisma.bid.findFirst({
+      // Две последние ставки, а не одна: вторая — это участник №2, которому по
+      // FR-14 положен выбор. Перебивать себя нельзя, поэтому автор предыдущей
+      // ставки и есть тот же участник, которого назвал бы скрипт завершения.
+      const top = await this.prisma.bid.findMany({
         where: { sessionId: session.id },
         orderBy: { seq: 'desc' },
-        select: { userId: true },
+        take: 2,
+        select: { userId: true, amountTiyn: true },
       });
+      const winner = top[0] ?? null;
+      const runnerUp = top[1] ?? null;
 
-      if (top === null && (await this.hadBids(session.lotId))) {
+      if (winner === null && (await this.hadBids(session.lotId))) {
         this.logger.warn(
           `Лот ${session.lotId}: цена росла, но ставок в базе нет — ` +
             'возвраты отложены до появления победителя',
@@ -152,15 +162,52 @@ export class RefundService {
         continue;
       }
 
+      /**
+       * Предложение участнику №2 — ДО открытия возвратов, как и в finisher'е.
+       *
+       * Иначе его задаток уходит в общий возврат вместе с остальными, и выбор
+       * из двух опций (FR-14) он не получает вовсе: сверка «починила» бы лот,
+       * молча лишив человека права, которое ему даёт регламент. Вызов
+       * идемпотентен — метку срока он ставит только задатку на спецсчёте.
+       */
+      if (runnerUp !== null && session.finishedAt !== null) {
+        await this.runnerUp.offer({
+          lotId: session.lotId,
+          userId: runnerUp.userId,
+          finishedAtMs: session.finishedAt.getTime(),
+        });
+      }
+
       opened += await this.deposits.openRefundsForLot(session.lotId, {
-        winnerUserId: top?.userId ?? null,
+        winnerUserId: winner?.userId ?? null,
+        runnerUpUserId: runnerUp?.userId ?? null,
       });
+
+      // Доля партнёра — часть того же закрытия лота, и её мог не пережить тот
+      // же сбой. Начисляем только если записи ещё нет: повторный вызов не
+      // создал бы второй строки, но отправил бы партнёру второе уведомление о
+      // деньгах, которые он уже получил.
+      if (winner !== null) {
+        await this.accrueBonusOnce(session.lotId, winner.amountTiyn);
+      }
     }
 
     if (opened > 0) {
       this.logger.warn(`Сверка возвратов: открыто задним числом ${String(opened)}`);
     }
     return opened;
+  }
+
+  /** Начислить бонус партнёра, если по этому лоту его ещё нет. */
+  private async accrueBonusOnce(lotId: string, finalPriceTiyn: bigint): Promise<void> {
+    const existing = await this.prisma.refBonus.findFirst({
+      where: { lotId },
+      select: { id: true },
+    });
+    if (existing !== null) {
+      return;
+    }
+    await this.refBonus.accrue(lotId, finalPriceTiyn);
   }
 
   /** Росла ли цена лота — значит ставки были, даже если строк ещё нет. */

@@ -8,7 +8,7 @@ import {
 import type { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { AppModule } from '../src/app.module';
 import { configureApp } from '../src/app.setup';
@@ -366,5 +366,119 @@ describe('T-028: персист ставок и лента истории', () =
     expect(winning.blindCode).toBe(outcome.winnerBlindId);
     expect(winning.userId).toBe(outcome.winnerUserId);
     expect(winning.amountTiyn).toBe(outcome.finalPriceTiyn);
+  });
+
+  /**
+   * Регресс: сбой базы в момент закрытия торгов не теряет финиш.
+   *
+   * Решение о закрытии принимает Redis и принимает необратимо: скрипт снимает
+   * лот с индекса дедлайнов, и второй раз finisher его там не найдёт. Раньше
+   * падение записи в PostgreSQL сразу после этого оставляло лот закрытым в
+   * Redis и «идущим» в базе навсегда, а на строке сессии в базе висят возврат
+   * задатков (сверка ищет сессии со статусом FINISHED) и протокол торгов. То
+   * есть проигравшие не получали свои 10 %, победитель — документ, и увидеть
+   * это было нельзя: в каталоге лот выглядит закрытым.
+   */
+  it('регресс: сбой базы при закрытии торгов не теряет финиш', async () => {
+    const { lot, first } = await arena();
+    await bids.place({
+      lotId: lot.id,
+      bidderId: first,
+      blindCode: 'Инвестор #704',
+      expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+    });
+    await drainAll();
+    await redis.client.hset(state.stateKey(lot.id), 'deadlineMs', String(Date.now() - 1));
+
+    // База отваливается ровно на записи о закрытии — первый же запрос persist().
+    const failing = vi
+      .spyOn(prisma.auctionSession, 'updateMany')
+      .mockRejectedValueOnce(new Error('база недоступна'));
+    await expect(finisher.finishLot(lot.id)).rejects.toThrow('база недоступна');
+    failing.mockRestore();
+
+    // В Redis торги закрыты и с индекса дедлайнов сняты: сам себя finisher уже
+    // не найдёт — ровно то, что делало потерю необратимой.
+    expect((await state.read(lot.id))?.status).toBe('FINISHED');
+    expect(await state.dueLots(Date.now())).toHaveLength(0);
+    // А в базе сессия всё ещё идёт: возвраты и протокол её не видят.
+    const stale = await prisma.auctionSession.findFirstOrThrow({ where: { lotId: lot.id } });
+    expect(stale.status).toBe('RUNNING');
+    expect(await finisher.unpersistedCount()).toBe(1);
+
+    // Повторный заход дозакрывает — и лот, и сессию.
+    expect(await finisher.retryUnpersisted()).toBe(1);
+    const session = await prisma.auctionSession.findFirstOrThrow({ where: { lotId: lot.id } });
+    expect(session.status).toBe('FINISHED');
+    expect((await prisma.lot.findUniqueOrThrow({ where: { id: lot.id } })).status).toBe('FINISHED');
+    // Отметка снята: повторно тот же лот не разбирается.
+    expect(await finisher.unpersistedCount()).toBe(0);
+    expect(await finisher.retryUnpersisted()).toBe(0);
+  });
+
+  /**
+   * Регресс: неисправимая запись не останавливает перенос целиком.
+   *
+   * Пачка пишется одним `createMany`, и запись, не проходящая по внешнему
+   * ключу, валит её всю. Раньше пачка повторялась бесконечно, и новые ставки не
+   * доезжали в PostgreSQL вообще — в зале это выглядит как живые торги при
+   * пустой ленте истории, а обнаруживается, когда приходят за протоколом.
+   * Теперь виновная запись уходит в карантин, а остальные записываются.
+   */
+  it('регресс: битая запись уходит в карантин и не держит остальные', async () => {
+    const { lot, first } = await arena();
+    const session = await prisma.auctionSession.findFirstOrThrow({ where: { lotId: lot.id } });
+
+    // Ставка по несуществующему лоту: внешний ключ её не пропустит никогда,
+    // сколько ни повторяй. Так выглядит запись из прошлого прогона или из
+    // сессии удалённого лота.
+    await redis.client.xadd(
+      bids.outboxKey(),
+      '*',
+      'lotId',
+      '00000000-0000-4000-8000-000000000000',
+      'sessionId',
+      session.id,
+      'userId',
+      first,
+      'amountTiyn',
+      '103000000',
+      'seq',
+      '777',
+      'blindCode',
+      'Инвестор #777',
+      'serverTs',
+      String(Date.now()),
+    );
+
+    // Настоящая ставка — в той же пачке, что и битая.
+    await bids.place({
+      lotId: lot.id,
+      bidderId: first,
+      blindCode: 'Инвестор #704',
+      expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+    });
+
+    const written = await outbox.drain(500);
+
+    // Главное: заход не упал и хорошая ставка в базе.
+    expect(written).toBe(1);
+    expect(await prisma.bid.count({ where: { lotId: lot.id } })).toBe(1);
+
+    // Битая запись не потеряна — она в карантине, с причиной отказа базы.
+    expect(await outbox.deadCount()).toBe(1);
+    const quarantined = await redis.client.xrange(outbox.deadKey(), '-', '+');
+    const fields = new Map<string, string>();
+    const flat = quarantined[0]?.[1] ?? [];
+    for (let i = 0; i + 1 < flat.length; i += 2) {
+      fields.set(String(flat[i]), String(flat[i + 1]));
+    }
+    expect(fields.get('seq')).toBe('777');
+    expect(fields.get('amountTiyn')).toBe('103000000');
+    expect(fields.get('reason') ?? '').not.toBe('');
+
+    // И очередь свободна: следующий заход не наткнётся на ту же запись.
+    expect(await outbox.pendingCount()).toBe(0);
+    expect(await outbox.drain(500)).toBe(0);
   });
 });

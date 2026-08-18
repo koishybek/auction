@@ -1,6 +1,7 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 
 import { BidOutboxService } from '../auction/bid-outbox.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 /**
  * Как часто разбирается outbox.
@@ -10,6 +11,14 @@ import { BidOutboxService } from '../auction/bid-outbox.service';
  * потоке заход стоит одного XREADGROUP.
  */
 const DRAIN_MS = 200;
+
+/**
+ * Как часто обновляется глубина очереди для метрик.
+ *
+ * Реже, чем идёт разбор: остановка переноса — это минуты, а не миллисекунды, и
+ * два лишних обращения в Redis пять раз в секунду тут ни к чему.
+ */
+const DEPTH_MS = 5_000;
 
 /**
  * Перенос ставок из Redis в PostgreSQL (T-028).
@@ -23,22 +32,53 @@ const DRAIN_MS = 200;
 export class BidPersistWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BidPersistWorker.name);
   private timer: NodeJS.Timeout | null = null;
+  private depthTimer: NodeJS.Timeout | null = null;
   private running = false;
 
-  constructor(private readonly outbox: BidOutboxService) {}
+  constructor(
+    private readonly outbox: BidOutboxService,
+    private readonly metrics: MetricsService,
+  ) {}
 
   onModuleInit(): void {
     this.timer = setInterval(() => {
       void this.drain();
     }, DRAIN_MS);
     this.timer.unref();
+    this.depthTimer = setInterval(() => {
+      void this.refreshDepth();
+    }, DEPTH_MS);
+    this.depthTimer.unref();
     this.logger.log(`Перенос ставок поднят: разбор outbox каждые ${String(DRAIN_MS)} мс`);
   }
 
   onModuleDestroy(): void {
-    if (this.timer !== null) {
-      clearInterval(this.timer);
-      this.timer = null;
+    for (const timer of [this.timer, this.depthTimer]) {
+      if (timer !== null) {
+        clearInterval(timer);
+      }
+    }
+    this.timer = null;
+    this.depthTimer = null;
+  }
+
+  /**
+   * Отдать наружу глубину очереди и размер карантина.
+   *
+   * Ошибка здесь не должна ронять перенос: метрика — это про наблюдение, а не
+   * про работу. Но и молчать нельзя, иначе «метрик нет» будет выглядеть как
+   * «всё спокойно».
+   */
+  private async refreshDepth(): Promise<void> {
+    try {
+      this.metrics.setOutboxDepth({
+        pending: await this.outbox.pendingCount(),
+        dead: await this.outbox.deadCount(),
+      });
+    } catch (error) {
+      this.logger.warn(
+        `Не удалось снять глубину outbox: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

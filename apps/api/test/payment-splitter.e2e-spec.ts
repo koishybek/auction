@@ -170,6 +170,18 @@ describe('T-046: расщепление доплаты', () => {
     expect(bank.splitsSent()).toHaveLength(1);
     expect(bank.splitsSent()[0]?.parts).toHaveLength(3);
     expect(splits.every((split) => split.status === 'SENT')).toBe(true);
+
+    /**
+     * У каждой доли свой номер банковской операции (T-055).
+     *
+     * Раньше во все три строки писался общий идентификатор расщепления, и при
+     * отказе одного перевода сверить его с выпиской было нечем: у отклонённого и
+     * у прошедших один и тот же номер. Спор о неполученных деньгах продавца
+     * разбирается именно по номеру операции.
+     */
+    const refs = splits.map((split) => split.bankRef);
+    expect(refs.every((ref) => ref !== null && ref !== '')).toBe(true);
+    expect(new Set(refs).size).toBe(3);
   });
 
   it('DoD: повторный вебхук не создаёт вторых поручений', async () => {

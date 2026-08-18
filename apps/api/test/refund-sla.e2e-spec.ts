@@ -310,6 +310,89 @@ describe('T-037: авто-возврат SLA 24 часа', () => {
     }
   });
 
+  /**
+   * Регресс (T-055): сверка обязана дозакрывать не только возвраты.
+   *
+   * Возвраты, предложение участнику №2 (FR-14) и бонус партнёра (FR-19) —
+   * один и тот же шаг закрытия лота, и падает он целиком. Сверка при этом
+   * раньше открывала только возвраты: участник №2 получал возврат как обычный
+   * проигравший и терял право выбора, а бонус партнёра не начислялся уже
+   * никогда — второго места, откуда его начисляют, в системе нет.
+   */
+  it('регресс: сверка возвращает участнику №2 его выбор и начисляет бонус партнёра', async () => {
+    const { lotId, winner, losers } = await arena();
+    const second = first(losers);
+
+    // Вторая ставка — от участника, который станет №2 после перебивки.
+    await placement.place({
+      lotId,
+      userId: second,
+      expectedAmountTiyn: await bids.nextPriceTiyn(lotId),
+    });
+    await placement.place({
+      lotId,
+      userId: winner,
+      expectedAmountTiyn: await bids.nextPriceTiyn(lotId),
+    });
+    await outbox.drain();
+
+    // Лот пришёл от партнёра: на нём висит доля 2 % (FR-19).
+    const partner = await prisma.user.create({
+      data: { roles: ['PARTNER'] },
+      select: { id: true },
+    });
+    await prisma.partnerLead.create({
+      data: {
+        partnerId: partner.id,
+        lotId,
+        cadastreOrVin: `LEAD-${randomUUID()}`,
+        status: 'LOCKED',
+        lockedUntil: new Date(Date.now() + 86_400_000),
+        // Контакт владельца — шифрованная колонка. Здесь её никто не
+        // расшифровывает: тесту важна связь «лот пришёл от партнёра».
+        ownerContactEnc: Buffer.from('фикстура T-055'),
+      },
+    });
+
+    await finish(lotId);
+
+    // Как будто finisher упал на шаге возвратов: ни возвратов, ни предложения
+    // участнику №2, ни бонуса.
+    await prisma.deposit.updateMany({
+      where: { lotId },
+      data: { status: 'ON_SPECIAL_ACCOUNT', refundDeadlineAt: null, runnerUpUntil: null },
+    });
+    await prisma.refBonus.deleteMany({ where: { lotId } });
+    await prisma.auctionSession.updateMany({
+      where: { lotId },
+      data: { finishedAt: new Date(Date.now() - 120_000) },
+    });
+
+    await refunds.reconcileFinishedLots();
+
+    // Участник №2 не в общем возврате: у него метка срока и выбор из двух опций.
+    const runnerUpDeposit = await prisma.deposit.findFirstOrThrow({
+      where: { lotId, userId: second },
+    });
+    expect(runnerUpDeposit.status).toBe('ON_SPECIAL_ACCOUNT');
+    expect(runnerUpDeposit.runnerUpUntil).not.toBeNull();
+
+    // Победителю не возвращают, остальным — возвращают.
+    expect(await statusOf(lotId, winner)).toBe('ON_SPECIAL_ACCOUNT');
+    for (const loser of losers.slice(1)) {
+      expect(await statusOf(lotId, loser)).toBe('REFUND_PENDING');
+    }
+
+    // Бонус партнёра начислен — от победной цены, а не от стартовой.
+    const bonus = await prisma.refBonus.findFirstOrThrow({ where: { lotId } });
+    expect(bonus.status).toBe('ACCRUED');
+    expect(bonus.amountTiyn).toBeGreaterThan(0n);
+
+    // Повторный заход ничего не дублирует: сверка идемпотентна.
+    await refunds.reconcileFinishedLots();
+    expect(await prisma.refBonus.count({ where: { lotId } })).toBe(1);
+  });
+
   it('сверка не трогает лот, чьи ставки ещё не доехали в базу', async () => {
     const { lotId } = await arena();
     await finish(lotId);

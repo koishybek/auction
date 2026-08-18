@@ -134,6 +134,25 @@ describe('T-039: состояние зала', () => {
     expect(state.feed[0]?.blindId).toBe('Инвестор #701');
   });
 
+  it('шаг в состоянии всегда означает СЛЕДУЮЩИЙ шаг, а не сделанный', () => {
+    // В событиях сервера `bid_step_kzt` означает разное: в снимке — размер
+    // следующего шага, в `bid_updated` — шаг уже сделанной ставки от прежней
+    // цены. Раньше оба попадали в одно поле состояния по очереди, и после
+    // переподключения «шаг» на экране менялся при неизменной цене.
+    const afterBid = applyBid(applySnapshot(snapshot()), bid(1, 1_030_000));
+    expect(afterBid.stepTenge).toBe(afterBid.nextPriceTenge - afterBid.currentPriceTenge);
+
+    const afterSnapshot = applySnapshot(
+      snapshot({ current_price_kzt: 1_030_000, next_price_kzt: 1_060_900, bid_step_kzt: 30_900 }),
+    );
+    expect(afterSnapshot.stepTenge).toBe(
+      afterSnapshot.nextPriceTenge - afterSnapshot.currentPriceTenge,
+    );
+
+    // Шаг конкретной ставки при этом не потерян — он в её строке ленты.
+    expect(afterBid.feed[0]?.stepTenge).toBe(1_030_000 - Math.round(1_030_000 / 1.03));
+  });
+
   it('запоздавшее событие не откатывает цену назад', () => {
     const after = applyBid(applySnapshot(snapshot()), bid(2, 1_060_900));
     const stale = applyBid(after, bid(1, 1_030_000));

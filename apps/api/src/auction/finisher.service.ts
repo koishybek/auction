@@ -21,7 +21,8 @@ import { NOW_MS_LUA } from './lua/primitives';
  * STILL_RUNNING, либо финиш успел первым, и ставка получает NOT_RUNNING.
  * Двойного исхода не существует — а он означал бы двух победителей одного лота.
  *
- * KEYS[1] — состояние лота, KEYS[2] — индекс дедлайнов
+ * KEYS[1] — состояние лота, KEYS[2] — индекс дедлайнов, KEYS[3] — набор
+ * незафиксированных финишей
  * ARGV[1] — канал оповещения, ARGV[2] — id лота
  */
 const FINISH_SESSION = `
@@ -45,6 +46,11 @@ end
 
 redis.call('HSET', KEYS[1], 'status', 'FINISHED', 'finishedAtMs', string.format('%.0f', nowMs))
 redis.call('ZREM', KEYS[2], ARGV[2])
+-- Лот снят с индекса дедлайнов и больше сюда не вернётся, а запись в
+-- PostgreSQL ещё не сделана. Отметка в этом наборе — единственное, по чему
+-- незафиксированный финиш можно найти потом: без неё сбой базы оставляет лот
+-- закрытым в Redis и «идущим» в базе навсегда (T-055).
+redis.call('SADD', KEYS[3], ARGV[2])
 
 -- Победитель — последний, чью ставку приняли. Если ставок не было вовсе,
 -- лот закрывается без победителя: торги состоялись, покупателя нет.
@@ -108,7 +114,7 @@ export class FinisherService {
   private readonly finishScript: RedisScript;
 
   constructor(
-    redis: RedisService,
+    private readonly redis: RedisService,
     private readonly state: AuctionStateService,
     private readonly bids: BidService,
     private readonly prisma: PrismaService,
@@ -120,18 +126,127 @@ export class FinisherService {
     this.finishScript = redis.script(FINISH_SESSION);
   }
 
-  /** Закрыть все торги с истёкшим дедлайном. Возвращает закрытые. */
+  /**
+   * Закрыть все торги с истёкшим дедлайном. Возвращает закрытые.
+   *
+   * Сбой на одном лоте не отменяет разбор остальных: у каждого свой дедлайн и
+   * свои участники, и падение записи по одному лоту не причина оставить
+   * открытыми соседние. Незафиксированный лот подберёт `retryUnpersisted`.
+   */
   async finishDue(nowMs: number): Promise<FinishOutcome[]> {
     const due = await this.state.dueLots(nowMs);
     const finished: FinishOutcome[] = [];
 
     for (const lotId of due) {
-      const outcome = await this.finishLot(lotId);
-      if (outcome.kind === 'FINISHED') {
-        finished.push(outcome);
+      try {
+        const outcome = await this.finishLot(lotId);
+        if (outcome.kind === 'FINISHED') {
+          finished.push(outcome);
+        }
+      } catch (error) {
+        this.logger.error(
+          `Лот ${lotId}: закрытие не зафиксировано в базе — ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     }
     return finished;
+  }
+
+  /**
+   * Дозафиксировать финиши, которые не доехали в PostgreSQL.
+   *
+   * Нужна, потому что решение о закрытии принимает Redis и принимает его
+   * необратимо: скрипт снимает лот с индекса дедлайнов, и второй раз он туда не
+   * попадёт. Если запись в базу после этого упала, лот остаётся закрытым в
+   * Redis и «идущим» в базе — а на строке сессии в базе висит всё остальное:
+   * возвраты задатков ищут сессии со статусом FINISHED, протокол торгов тоже.
+   * То есть проигравшие не получают свои 10 %, победитель не получает документ,
+   * и никто об этом не узнаёт: в каталоге лот выглядит живым.
+   *
+   * Возвращает число дозафиксированных лотов.
+   */
+  async retryUnpersisted(limit = 50): Promise<number> {
+    const pending = await this.redis.client.smembers(this.unpersistedKey());
+    let fixed = 0;
+
+    for (const lotId of pending.slice(0, limit)) {
+      const outcome = await this.rebuildOutcome(lotId);
+      if (outcome === null) {
+        // Состояния в Redis больше нет — восстановить итог нечем. Молча
+        // выбрасывать нельзя: это ставки, которые видели участники.
+        this.logger.error(
+          `Лот ${lotId}: финиш не зафиксирован, а состояние в Redis потеряно — разбирать руками`,
+        );
+        continue;
+      }
+      try {
+        await this.persist(outcome);
+        fixed += 1;
+        this.logger.warn(`Лот ${lotId}: финиш дозафиксирован в базе повторным заходом`);
+      } catch (error) {
+        this.logger.error(
+          `Лот ${lotId}: повторная фиксация финиша не удалась — ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return fixed;
+  }
+
+  /** Сколько закрытых лотов ждут фиксации в базе. Ноль — норма. */
+  async unpersistedCount(): Promise<number> {
+    return await this.redis.client.scard(this.unpersistedKey());
+  }
+
+  /** Набор лотов, закрытых в Redis и ещё не зафиксированных в PostgreSQL. */
+  unpersistedKey(): string {
+    return this.redis.key('auction', 'finish', 'unpersisted');
+  }
+
+  /**
+   * Собрать итог закрытых торгов заново из состояния в Redis.
+   *
+   * Тот же источник, из которого его собрал скрипт: цена, номер последней
+   * ставки и псевдонимы двух последних участников живут в хеше состояния и
+   * после закрытия не меняются.
+   */
+  private async rebuildOutcome(
+    lotId: string,
+  ): Promise<(FinishOutcome & { kind: 'FINISHED' }) | null> {
+    const raw = await this.redis.client.hmget(
+      this.state.stateKey(lotId),
+      'status',
+      'priceTiyn',
+      'seq',
+      'sessionId',
+      'lastBidderId',
+      'lastBlindCode',
+      'prevBidderId',
+      'prevBlindCode',
+      'finishedAtMs',
+    );
+    const sessionId = raw[3] ?? '';
+    if (raw[0] !== 'FINISHED' || sessionId === '') {
+      return null;
+    }
+    // Пустая строка и отсутствие поля значат одно: такого участника не было.
+    const text = (index: number): string | null => {
+      const value = raw[index];
+      return value === null || value === undefined || value === '' ? null : value;
+    };
+    return {
+      kind: 'FINISHED',
+      lotId,
+      sessionId,
+      finalPriceTiyn: BigInt(raw[1] ?? '0'),
+      seq: Number(raw[2] ?? '0'),
+      winnerUserId: text(4),
+      winnerBlindId: text(5),
+      runnerUpUserId: text(6),
+      runnerUpBlindId: text(7),
+      finishedAtMs: Number(raw[8] ?? '0'),
+    };
   }
 
   /**
@@ -145,7 +260,7 @@ export class FinisherService {
    */
   async finishLot(lotId: string): Promise<FinishOutcome> {
     const raw = await this.finishScript.run(
-      [this.state.stateKey(lotId), this.state.deadlinesKey()],
+      [this.state.stateKey(lotId), this.state.deadlinesKey(), this.unpersistedKey()],
       [this.bids.channel(lotId), lotId],
     );
     const parts = asStrings(raw);
@@ -249,6 +364,11 @@ export class FinisherService {
           `${error instanceof Error ? error.message : String(error)}`,
       );
     }
+
+    // Отметка снимается последней: пока она стоит, лот считается
+    // незафиксированным и будет разобран повторно. Снять её раньше значило бы
+    // объявить фиксацию удавшейся до того, как она удалась.
+    await this.redis.client.srem(this.unpersistedKey(), outcome.lotId);
   }
 }
 

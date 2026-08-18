@@ -17,7 +17,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { AuctionStateService } from '../auction/auction-state.service';
 import { AuctionService } from '../auction/auction.service';
 import { BidPlacementService } from '../auction/bid-placement.service';
-import { DEGRADED_RTT_MS, SlaFreezeService } from '../auction/sla-freeze.service';
+import { isDegradedLink, SlaFreezeService } from '../auction/sla-freeze.service';
 import { ACCESS_COOKIE, cookieValue } from '../auth/session-cookies';
 import { clientIpFrom } from '../common/http/client-ip';
 import { TokenService } from '../auth/token.service';
@@ -82,8 +82,19 @@ interface Connection extends RoomMember {
   readonly ip: string | null;
   /** Сколько тактов подряд не ответил на ping. */
   missedPongs: number;
-  /** Когда отправлен последний ping — от него считается задержка. */
+  /** Когда отправлен последний ping. */
   pingSentAt: number | null;
+  /**
+   * Когда отправлен САМЫЙ РАННИЙ ping без ответа — от него считается задержка.
+   *
+   * Отдельно от `pingSentAt` не для порядка: такт heartbeat — 2 с, а порог
+   * деградации ровно 2 с (ТЗ §2.2). Ответ на медленном канале приходит уже
+   * после того, как ушёл следующий ping, и задержка, посчитанная от него,
+   * выходит меньше настоящей на целый такт. Клиент с реальными 2.5 с выглядел
+   * при этом на 0.5 с — то есть здоровым, и заморозка не наступала именно в том
+   * случае, ради которого написана.
+   */
+  pendingPingAt: number | null;
   /** Задержка последнего ответа, мс. null — ответа ещё не было. */
   rttMs: number | null;
   rooms: Set<string>;
@@ -202,6 +213,7 @@ export class WsGatewayService implements OnModuleDestroy {
       ip: clientIp(request, this.trustProxyHops, this.trustCloudflareIp),
       missedPongs: 0,
       pingSentAt: null,
+      pendingPingAt: null,
       rttMs: null,
       rooms: new Set<string>(),
       send: (payload: string) => {
@@ -209,6 +221,9 @@ export class WsGatewayService implements OnModuleDestroy {
           socket.send(payload);
         }
       },
+      // По этому признаку комната отличает участника, ушедшего во время
+      // подписки на канал, от живого (см. LotRoomsService.join).
+      isAlive: () => socket.readyState === socket.OPEN,
     };
     this.nextId += 1;
     this.connections.add(connection);
@@ -235,12 +250,17 @@ export class WsGatewayService implements OnModuleDestroy {
     if (message.event === 'pong') {
       // Задержка ответа — единственная метрика качества связи, которая у нас
       // есть: клиент ничего не измеряет и ничего не присылает, кроме факта.
-      if (connection.pingSentAt !== null) {
-        connection.rttMs = this.time.wallClockMs() - connection.pingSentAt;
+      // Считаем от САМОГО РАННЕГО неотвеченного ping, а не от последнего: на
+      // медленном канале ответ приходит уже после следующего такта, и от
+      // последнего задержка выходит меньше настоящей ровно на такт.
+      const sentAt = connection.pendingPingAt ?? connection.pingSentAt;
+      if (sentAt !== null) {
+        connection.rttMs = this.time.wallClockMs() - sentAt;
         // Та же величина уходит в метрику: по ней строится доля деградировавших
         // клиентов, а она предсказывает SLA Freeze раньше, чем он случится.
         this.metrics.observeHeartbeatRtt(connection.rttMs / 1000);
       }
+      connection.pendingPingAt = null;
       connection.missedPongs = 0;
       return;
     }
@@ -435,6 +455,20 @@ export class WsGatewayService implements OnModuleDestroy {
       largestRoom: this.rooms.largestRoom(),
     });
 
+    /**
+     * Оценка деградации идёт ДО рассылки нового ping, и это существенно.
+     *
+     * Проверка «ответа на ping нет дольше порога» смотрит на время отправки
+     * ping. Если сначала разослать новый, время отправки станет «сейчас» — и
+     * условие не выполнится ни для кого никогда, сколько бы клиент ни молчал.
+     * Именно так эта проверка и была мёртвой до T-055.
+     */
+    void this.checkDegradation(now).catch((error: unknown) => {
+      this.logger.warn(
+        `Оценка деградации не удалась: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+
     for (const connection of this.connections) {
       if (connection.missedPongs >= MISSED_PONGS_BEFORE_DROP) {
         // Молчащее соединение занимает память и получает события, которых
@@ -443,15 +477,12 @@ export class WsGatewayService implements OnModuleDestroy {
         continue;
       }
       connection.missedPongs += 1;
+      if (connection.pendingPingAt === null) {
+        connection.pendingPingAt = now;
+      }
       connection.pingSentAt = now;
       connection.send(ping);
     }
-
-    void this.checkDegradation(now).catch((error: unknown) => {
-      this.logger.warn(
-        `Оценка деградации не удалась: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    });
   }
 
   /**
@@ -468,9 +499,12 @@ export class WsGatewayService implements OnModuleDestroy {
     const perLot = new Map<string, { total: number; degraded: number }>();
 
     for (const connection of this.connections) {
-      const stale = connection.pingSentAt !== null && now - connection.pingSentAt > DEGRADED_RTT_MS;
-      const slow = connection.rttMs !== null && connection.rttMs > DEGRADED_RTT_MS;
-      const bad = stale || slow || connection.missedPongs > 1;
+      const bad = isDegradedLink({
+        nowMs: now,
+        pendingPingAt: connection.pendingPingAt,
+        rttMs: connection.rttMs,
+        missedPongs: connection.missedPongs,
+      });
 
       for (const lotId of connection.rooms) {
         const stats = perLot.get(lotId) ?? { total: 0, degraded: 0 };
