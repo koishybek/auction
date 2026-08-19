@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
 import { AuctionHall } from '@/components/auction-hall';
+import { AuctionResult } from '@/components/auction-result';
+import { RunnerUpModal } from '@/components/auction-modals';
 import { DepositWidget } from '@/components/deposit-widget';
 import { PhaseRatchet, phaseLabel } from '@/components/phase-ratchet';
 import { ViewBeacon } from '@/components/view-beacon';
@@ -74,13 +76,32 @@ export default async function LotPage({ params }: PageProps) {
 
       <PriceLadder lot={lot} price={price} />
 
-      {/* Зал живёт только во время торгов: до и после смотреть в нём нечего. */}
+      {/* Зал живёт сокетом и таймером — то и другое имеет смысл только в торгах. */}
       {lot.status === 'PHASE_III' && (
         <AuctionHall
           lotId={lot.id}
           wsUrlOverride={process.env['NEXT_PUBLIC_WS_URL']}
           wsPort={process.env['NEXT_PUBLIC_WS_PORT'] ?? '3200'}
         />
+      )}
+
+      {/*
+       * У закрытых торгов зала уже нет, а итог есть — и его обязан видеть
+       * каждый, кто откроет ссылку потом: из каталога, из письма, просто
+       * обновив вкладку. Победителя показывает сервер, из PostgreSQL.
+       */}
+      {lot.status === 'FINISHED' && (
+        <>
+          <AuctionResult lotId={lot.id} />
+          {/*
+           * Выбор участника №2 живёт пять дней (FR-14) — то есть заведомо
+           * дольше, чем открыта вкладка. Раньше окно монтировалось только
+           * внутри зала, а зал у закрытого лота не монтируется вовсе: человек,
+           * перезагрузивший страницу, терял своё право совсем. Переспрос здесь
+           * не нужен — метка давно записана, хватает одного вопроса.
+           */}
+          <RunnerUpModal lotId={lot.id} />
+        </>
       )}
 
       {/*

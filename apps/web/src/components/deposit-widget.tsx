@@ -35,8 +35,31 @@ const TICK_INTERVAL_MS = 1_000;
 type Snapshot =
   | { readonly kind: 'loading' }
   | { readonly kind: 'anonymous' }
+  /** Вошёл, но задаток по этому лоту вносить не может. Причина — от сервера. */
+  | { readonly kind: 'forbidden'; readonly reason: string }
   | { readonly kind: 'error'; readonly message: string }
   | { readonly kind: 'ready'; readonly view: DepositView };
+
+/**
+ * Почему сервер отказал. Код приходит в теле ответа — тем же полем, что и у
+ * отказов по ставке.
+ *
+ * Без этого разбора вошедший продавец, открывший собственный лот, читал
+ * «Войдите, чтобы продолжить»: сообщение врало о причине, и человек шёл
+ * входить второй раз.
+ */
+function forbiddenReason(code: unknown): string {
+  if (code === 'SELLER_OWN_LOT') {
+    return 'Это ваш лот. Продавец не участвует в торгах по собственному объекту.';
+  }
+  if (code === 'EGOV_NOT_VERIFIED') {
+    return 'Нужна учётная запись, подтверждённая через eGov: задаток — это деньги.';
+  }
+  if (code === 'USER_BLOCKED') {
+    return 'Учётная запись заблокирована. Обратитесь к оператору площадки.';
+  }
+  return 'Вносить задаток по этому лоту вам сейчас нельзя.';
+}
 
 export function DepositWidget({ lotId }: { lotId: string }) {
   const [snapshot, setSnapshot] = useState<Snapshot>({ kind: 'loading' });
@@ -52,8 +75,17 @@ export function DepositWidget({ lotId }: { lotId: string }) {
           headers: { accept: 'application/json', ...init?.headers },
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           setSnapshot({ kind: 'anonymous' });
+          return;
+        }
+        if (response.status === 403) {
+          // 403 — это «вошёл, но нельзя», а не «войдите». Разные вещи, и
+          // человеку важна именно причина.
+          const body: unknown = await response.json().catch(() => null);
+          const code =
+            typeof body === 'object' && body !== null ? (body as { code?: unknown }).code : null;
+          setSnapshot({ kind: 'forbidden', reason: forbiddenReason(code) });
           return;
         }
         if (!response.ok) {
@@ -107,6 +139,7 @@ export function DepositWidget({ lotId }: { lotId: string }) {
       {snapshot.kind === 'anonymous' && (
         <Muted>Задаток вносит подтверждённый через eGov инвестор. Войдите, чтобы продолжить.</Muted>
       )}
+      {snapshot.kind === 'forbidden' && <Muted>{snapshot.reason}</Muted>}
       {snapshot.kind === 'error' && <Muted>Не удалось получить статус: {snapshot.message}</Muted>}
 
       {snapshot.kind === 'ready' && (

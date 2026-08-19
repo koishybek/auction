@@ -10,7 +10,7 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "dev": "pnpm -r --parallel run dev",
+    "dev": "node scripts/dev.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
     "test:browser": "pnpm --filter @auction/e2e test:browser",
@@ -19,6 +19,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "check:env": "pnpm --filter @auction/api check:env",
+    "demo": "node scripts/demo.mjs",
     "db:generate": "pnpm --filter @auction/api db:generate",
     "db:migrate": "pnpm --filter @auction/api db:migrate",
     "db:deploy": "pnpm --filter @auction/api db:deploy",

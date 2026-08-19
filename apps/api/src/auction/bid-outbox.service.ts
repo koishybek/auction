@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 
 import { MetricsService } from '../metrics/metrics.service';
+import { isPermanentWriteError } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 import { TimeService } from '../time/time.service';
@@ -78,6 +79,9 @@ export class BidOutboxService {
       return 0;
     }
 
+    // Подтверждение только после удавшейся записи: временная ошибка базы
+    // бросается наружу из persist(), пачка остаётся неподтверждённой и придёт
+    // следующим заходом. Подтвердить её здесь значило бы потерять ставки.
     const { written, quarantined } = await this.persist(entries);
     await this.redis.client.xack(this.bids.outboxKey(), GROUP, ...entries.map((e) => e.id));
     this.metrics.observeOutboxDrain({ written, quarantined });
@@ -190,6 +194,19 @@ export class BidOutboxService {
         });
         written += result.count;
       } catch (error) {
+        /**
+         * В карантин уходит только то, что не запишется никогда.
+         *
+         * Временный сбой базы — перезапуск, исчерпанный пул, моргнувшая сеть —
+         * выглядит здесь точно так же, как битая запись, и разница огромна:
+         * первую надо повторить, вторую повторять бессмысленно. Отправив в
+         * карантин здоровую ставку, мы своими руками выкинули бы её из
+         * юридической записи. Поэтому при временной ошибке бросаем наружу:
+         * пачка не подтверждается и придёт следующим заходом целиком.
+         */
+        if (!isPermanentWriteError(error)) {
+          throw error;
+        }
         await this.quarantine(entry, error);
         quarantined += 1;
       }

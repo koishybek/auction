@@ -389,7 +389,8 @@ auction/
 ```bash
 pnpm install          # установка (Node 22+, pnpm 11+)
 pnpm check:env        # проверить коннект к managed PG/Redis (+ Lua, PTTL, pub/sub)
-pnpm dev              # api + web в watch-режиме
+pnpm dev              # все процессы в watch-режиме: api, gateway, воркер, web
+pnpm demo             # собранный стенд с наполненным каталогом и живыми торгами
 pnpm build            # сборка всех пакетов воркспейса
 pnpm test             # юнит + интеграционные
 pnpm test:browser     # приёмка в браузере (Playwright): поднимает свой стенд на 3110/3210/3111

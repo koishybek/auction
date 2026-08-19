@@ -129,7 +129,7 @@ interface RunnerUpState {
  * об этом приходится отдельно: право на выбор — не часть публичного состояния
  * торгов, и в общую рассылку оно попасть не может.
  */
-export function RunnerUpModal({ lotId }: { lotId: string }) {
+export function RunnerUpModal({ lotId, awaited = false }: { lotId: string; awaited?: boolean }) {
   const [state, setState] = useState<RunnerUpState | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -166,7 +166,10 @@ export function RunnerUpModal({ lotId }: { lotId: string }) {
         return;
       }
       attempts += 1;
-      if (!shouldAskAgain(answer, attempts)) {
+      // Переспрашивает только тот, кто ставил: остальным ответ уже известен и
+      // не изменится. Иначе на финише крупного лота переспрос делали бы все
+      // зрители сразу — по десять запросов на каждого.
+      if (!awaited || !shouldAskAgain(answer, attempts)) {
         return;
       }
       timer = setTimeout(() => {
@@ -181,7 +184,7 @@ export function RunnerUpModal({ lotId }: { lotId: string }) {
         clearTimeout(timer);
       }
     };
-  }, [load]);
+  }, [load, awaited]);
 
   const choose = async (option: 'A' | 'B'): Promise<void> => {
     setBusy(true);

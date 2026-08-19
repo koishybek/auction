@@ -75,6 +75,15 @@ interface AuctionStore {
   readonly hall: HallState;
   readonly connection: ConnectionState;
   readonly feedback: BidFeedback | null;
+  /**
+   * Ставил ли этот клиент в текущих торгах.
+   *
+   * Право участника №2 (FR-14) достаётся тому, кто ставил, — значит и ждать
+   * ответа о нём имеет смысл только ему. Без этого признака переспрос делали бы
+   * все зрители зала разом, а зал по NFR-03 это до пятидесяти тысяч человек, и
+   * момент финиша и так самый нагруженный.
+   */
+  readonly hasBid: boolean;
   /** Через сколько сервер обещает снять паузу SLA Freeze. `null` — паузы нет. */
   readonly resumeInMs: number | null;
   /**
@@ -186,7 +195,7 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
       return;
     }
     if (event === 'bid_accepted') {
-      set({ feedback: { kind: 'accepted', at: performance.now() } });
+      set({ feedback: { kind: 'accepted', at: performance.now() }, hasBid: true });
       return;
     }
     if (event === 'bid_rejected' || event === 'error') {
@@ -284,6 +293,7 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
     hall: initialHall(''),
     connection: 'offline',
     feedback: null,
+    hasBid: false,
     resumeInMs: null,
 
     join: (lotId: string, wsUrl: string): void => {
@@ -293,7 +303,7 @@ export const useAuctionStore = create<AuctionStore>((set, get) => {
       currentLot = lotId;
       currentUrl = wsUrl;
       attempt = 0;
-      set({ hall: initialHall(lotId), feedback: null });
+      set({ hall: initialHall(lotId), feedback: null, hasBid: false });
       open();
       startWatchdog();
     },

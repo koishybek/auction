@@ -16,7 +16,18 @@ image:
 #   kubectl create secret generic auction-secrets \
 #     --from-literal=DATABASE_URL=... --from-literal=DIRECT_URL=... \
 #     --from-literal=REDIS_URL=... \
-#     --from-literal=PII_ENCRYPTION_KEY=... --from-literal=PII_BLIND_INDEX_KEY=...
+#     --from-literal=PII_ENCRYPTION_KEY=... --from-literal=PII_BLIND_INDEX_KEY=... \
+#     --from-literal=JWT_ACCESS_SECRET=... --from-literal=JWT_REFRESH_SECRET=... \
+#     --from-literal=TURNSTILE_SECRET_KEY=...
+#
+# Все семь обязательны. Схема окружения проверяется на старте, и под с неполным
+# секретом не поднимется вовсе — уйдёт в CrashLoopBackOff с перечислением
+# недостающего в логе. Раньше здесь были названы пять: по этой команде кластер
+# гарантированно не вставал, а выглядело это как поломка образа.
+#
+# Два ключа ПДн обязаны различаться — это тоже проверяется на старте: утечка
+# ключа поиска не должна раскрывать сами персональные данные. TURNSTILE_SECRET_KEY
+# в production пустым быть не может: тихий мок капчи на бою — открытая дверь.
 secrets:
   existingSecret: auction-secrets
 

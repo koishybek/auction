@@ -417,6 +417,40 @@ describe('T-028: персист ставок и лента истории', () =
   });
 
   /**
+   * Регресс: временный сбой базы не отправляет здоровые ставки в карантин.
+   *
+   * Карантин — это признание «эта запись не запишется никогда». Перезапуск
+   * PostgreSQL, исчерпанный пул или моргнувшая сеть выглядят в коде записи
+   * ровно так же, как битая ставка, и разница огромна: первое надо повторить,
+   * второе повторять бессмысленно. Не различив их, перенос своими руками
+   * выкинул бы ставки участников из юридической записи.
+   */
+  it('регресс: временная ошибка базы не отправляет ставку в карантин', async () => {
+    const { lot, first } = await arena();
+    await bids.place({
+      lotId: lot.id,
+      bidderId: first,
+      blindCode: 'Инвестор #704',
+      expectedAmountTiyn: await bids.nextPriceTiyn(lot.id),
+    });
+
+    // Пачка падает так, как падает недоступная база: код P1001, не про данные.
+    const outage = Object.assign(new Error('база временно недоступна'), { code: 'P1001' });
+    const failing = vi.spyOn(prisma.bid, 'createMany').mockRejectedValue(outage);
+    await expect(outbox.drain(500)).rejects.toThrow('база временно недоступна');
+    failing.mockRestore();
+
+    // Ставка не в карантине и не потеряна — она ждёт следующего захода.
+    expect(await outbox.deadCount()).toBe(0);
+    expect(await prisma.bid.count({ where: { lotId: lot.id } })).toBe(0);
+
+    // База вернулась — ставка доезжает сама, без вмешательства.
+    expect(await outbox.drain(500)).toBe(1);
+    expect(await prisma.bid.count({ where: { lotId: lot.id } })).toBe(1);
+    expect(await outbox.deadCount()).toBe(0);
+  });
+
+  /**
    * Регресс: неисправимая запись не останавливает перенос целиком.
    *
    * Пачка пишется одним `createMany`, и запись, не проходящая по внешнему

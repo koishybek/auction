@@ -65,6 +65,30 @@ export default tseslint.config(
   },
 
   /**
+   * Скрипты запуска — обычный Node, но вне tsconfig.
+   *
+   * Без объявленных глобалей `process`, `console`, `fetch` и таймеры для ESLint
+   * просто неизвестные имена, и весь файл превращается в сплошной no-undef.
+   * Гасим не правило, а незнание: правило ловит опечатки, и терять его нельзя.
+   */
+  {
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      globals: {
+        process: 'readonly',
+        console: 'readonly',
+        fetch: 'readonly',
+        WebSocket: 'readonly',
+        setTimeout: 'readonly',
+        clearTimeout: 'readonly',
+        setInterval: 'readonly',
+        clearInterval: 'readonly',
+        URL: 'readonly',
+      },
+    },
+  },
+
+  /**
    * Сценарии k6 исполняются его собственным рантаймом, а не Node.
    *
    * `__ENV`, `__VU` и `open()` объявляет k6 — для ESLint это неизвестные

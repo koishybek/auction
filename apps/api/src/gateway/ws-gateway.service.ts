@@ -561,8 +561,26 @@ export class WsGatewayService implements OnModuleDestroy {
       clearInterval(this.ticker);
       this.ticker = null;
     }
+    /**
+     * Штатная остановка закрывает сокеты, а не рвёт их.
+     *
+     * `terminate()` обрывает TCP без кадра закрытия: браузер узнаёт об этом не
+     * сразу, а по тишине — то есть участник видит замерший таймер и решает, что
+     * сломались торги. Выкат gateway при этом дело обычное: три реплики
+     * перезапускаются по очереди, и каждая уносила бы своих клиентов в такую
+     * тишину. `close(1001, 'shutting down')` — код «сервер уходит»: клиент
+     * получает событие немедленно и переподключается к соседней реплике со
+     * своим разбросом (см. RECONNECT_JITTER), забирая свежий снимок.
+     *
+     * Рвём только то, что не закрылось само: сокет в полумёртвом состоянии не
+     * должен задерживать остановку процесса.
+     */
     for (const connection of this.connections) {
-      connection.socket.terminate();
+      try {
+        connection.socket.close(1001, 'shutting down');
+      } catch {
+        connection.socket.terminate();
+      }
     }
     this.connections.clear();
 

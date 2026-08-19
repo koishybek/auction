@@ -1,4 +1,10 @@
-import type { LivenessReport, LotListView, LotView, ReadinessReport } from '@auction/shared';
+import type {
+  BidUpdatedEvent,
+  LivenessReport,
+  LotListView,
+  LotView,
+  ReadinessReport,
+} from '@auction/shared';
 
 /**
  * Клиент API. Типы ответов берутся из @auction/shared — того же пакета, который
@@ -58,6 +64,17 @@ export function getLots(query: CatalogQuery = {}): Promise<ApiResult<LotListView
 
 export function getLot(id: string): Promise<ApiResult<LotView>> {
   return request<LotView>(`/api/lots/${id}`);
+}
+
+/**
+ * Лента ставок лота. Публичная: в ней только псевдонимы (FR-09).
+ *
+ * Нужна не только залу. Завершённые торги обязаны показывать свой итог и после
+ * закрытия — победителя и ход торгов, — а сокет к тому времени уже не о чем
+ * спрашивать: цена, ставки и победитель живут в PostgreSQL, и берутся оттуда.
+ */
+export function getLotBids(id: string, limit = 10): Promise<ApiResult<BidUpdatedEvent[]>> {
+  return request<BidUpdatedEvent[]>(`/api/lots/${id}/auction/bids?limit=${String(limit)}`);
 }
 
 export { API_BASE_URL };

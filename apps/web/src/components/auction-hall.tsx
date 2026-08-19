@@ -59,6 +59,7 @@ export function AuctionHall({
   const hall = useAuctionStore((store) => store.hall);
   const connection = useAuctionStore((store) => store.connection);
   const feedback = useAuctionStore((store) => store.feedback);
+  const hasBid = useAuctionStore((store) => store.hasBid);
   const resumeInMs = useAuctionStore((store) => store.resumeInMs);
   const join = useAuctionStore((store) => store.join);
   const leave = useAuctionStore((store) => store.leave);
@@ -123,8 +124,11 @@ export function AuctionHall({
             winnerBlindId={hall.winnerBlindId}
             finalPriceTenge={hall.currentPriceTenge}
           />
-          {/* Выбор предложен ровно одному человеку — окно само решит, ему ли. */}
-          <RunnerUpModal lotId={lotId} />
+          {/* Выбор предложен ровно одному человеку — окно само решит, ему ли.
+              `awaited` включает переспрос: метку участника №2 сервер пишет уже
+              после события о закрытии, и тому, кто ставил, ответ может ещё
+              ехать. Зрителю ждать нечего. */}
+          <RunnerUpModal lotId={lotId} awaited={hasBid} />
         </>
       )}
 
