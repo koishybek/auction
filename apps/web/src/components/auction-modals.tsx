@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import { formatTenge } from '@/lib/format';
+import { RUNNER_UP_RETRY_MS, shouldAskAgain } from '@/lib/runner-up-poll';
 
 /**
  * Модалки и баннер аукционного зала (T-040, FR-07/FR-08/FR-14).
@@ -132,17 +133,54 @@ export function RunnerUpModal({ lotId }: { lotId: string }) {
   const [state, setState] = useState<RunnerUpState | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<RunnerUpState | null> => {
     const response = await fetch(`/api/lots/${lotId}/deposit/runner-up`, {
       credentials: 'include',
       cache: 'no-store',
       headers: { accept: 'application/json' },
     });
-    setState(response.ok ? ((await response.json()) as RunnerUpState) : null);
+    const next = response.ok ? ((await response.json()) as RunnerUpState) : null;
+    setState(next);
+    return next;
   }, [lotId]);
 
+  /**
+   * Спрашиваем не один раз, а несколько — и вот почему.
+   *
+   * Окно монтируется на событии `auction_finished`, которое публикует скрипт
+   * закрытия в Redis. Метку участника №2 ставит воркер уже после — отдельной
+   * записью в PostgreSQL. Единственный вопрос, заданный на миллисекунду раньше
+   * этой записи, получает «не предлагали», и человек теряет свой выбор (FR-14)
+   * до перезагрузки страницы. Опрос короткий и прекращается сразу, как только
+   * пришло «да»: участников №2 на лоте ровно один, и если предложения нет,
+   * оно уже не появится.
+   */
   useEffect(() => {
-    void load();
+    let cancelled = false;
+    let attempts = 0;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const ask = async (): Promise<void> => {
+      const answer = await load();
+      if (cancelled) {
+        return;
+      }
+      attempts += 1;
+      if (!shouldAskAgain(answer, attempts)) {
+        return;
+      }
+      timer = setTimeout(() => {
+        void ask();
+      }, RUNNER_UP_RETRY_MS);
+    };
+
+    void ask();
+    return () => {
+      cancelled = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+    };
   }, [load]);
 
   const choose = async (option: 'A' | 'B'): Promise<void> => {
