@@ -2,7 +2,7 @@ import type { BehaviorSignals, BidDenyCode, BidRejectCode } from '@auction/share
 import { Injectable, Logger } from '@nestjs/common';
 
 import { AntibotService } from '../antibot/antibot.service';
-import { DepositsService } from '../deposits/deposits.service';
+import { BIDDING_ALLOWED_FROM } from '../deposits/deposit-status.machine';
 import { MetricsService, secondsSince } from '../metrics/metrics.service';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -55,7 +55,6 @@ export class BidPlacementService {
     private readonly bids: BidService,
     private readonly blindIds: BlindIdService,
     private readonly rateLimit: BidRateLimitService,
-    private readonly deposits: DepositsService,
     private readonly bidAudit: BidAuditService,
     private readonly antibot: AntibotService,
     private readonly metrics: MetricsService,
@@ -232,37 +231,62 @@ export class BidPlacementService {
   /**
    * Имеет ли участник право ставить на этот лот. `null` — имеет.
    *
-   * Всё одним запросом на пользователя и одним на задаток: путь ставки —
-   * критический, и лишний поход в базу здесь стоит миллисекунд на каждой
-   * ставке при пятидесяти тысячах участников.
+   * ОДИН запрос в PostgreSQL на все три вопроса: кто ставит, чей это лот и есть
+   * ли задаток. Раньше их было три — пользователь и лот параллельно, задаток
+   * следом, — и приёмочный прогон T-055 показал цену этого: ядро ставки
+   * укладывается в 2.4 мс при пороге 15, а полный путь — в 47.7 мс, и разница
+   * почти целиком складывается из ожидания базы. Ожидание не постоянно: под
+   * нагрузкой каждое обращение стоит очереди к пулу, и три обращения дают три
+   * очереди.
+   *
+   * Соединением, а не кэшем: у кэша допуска пришлось бы выбирать время жизни,
+   * а любое ненулевое означает окно, в котором ставку принимают у того, чей
+   * задаток уже вернули. Здесь же данные ровно такие же свежие, как раньше.
    */
   async checkEligibility(userId: string, lotId: string): Promise<BidDenyCode | null> {
-    const [user, lot] = await Promise.all([
-      this.prisma.user.findUnique({ where: { id: userId } }),
-      this.prisma.lot.findUnique({ where: { id: lotId }, select: { sellerId: true } }),
-    ]);
+    const rows = await this.prisma.$queryRaw<EligibilityRow[]>`
+      SELECT
+        u.status::text                 AS user_status,
+        u.egov_verified_at             AS egov_verified_at,
+        l.seller_id::text              AS seller_id,
+        d.status::text                 AS deposit_status
+      FROM users u
+      LEFT JOIN lots l ON l.id = ${lotId}::uuid
+      LEFT JOIN deposits d ON d.user_id = u.id AND d.lot_id = ${lotId}::uuid
+      WHERE u.id = ${userId}::uuid
+    `;
+    const row = rows[0];
 
-    if (user === null || user.status === 'BLOCKED') {
+    if (row === undefined || row.user_status === 'BLOCKED') {
       return 'USER_BLOCKED';
     }
     // Верификация — условие допуска к деньгам (FR-03). Читается из БД, а не из
     // токена: снятая верификация обязана действовать немедленно.
-    if (user.egovVerifiedAt === null) {
+    if (row.egov_verified_at === null) {
       return 'EGOV_NOT_VERIFIED';
     }
-    if (lot !== null && lot.sellerId === userId) {
+    if (row.seller_id === userId) {
       // Продавец, разгоняющий цену собственного лота, — это подлог, а не
       // участие. Проверка здесь, а не только в интерфейсе (см. DoD T-041).
       return 'SELLER_OWN_LOT';
     }
 
     // Без задатка на спецсчёте ставка не принимается ни при каких условиях:
-    // иначе цену поднимает тот, кто не может заплатить. Условие живёт в
-    // статусной машине задатка (T-034), а не сравнением строк здесь.
-    if (!(await this.deposits.isAllowedToBid(userId, lotId))) {
+    // иначе цену поднимает тот, кто не может заплатить. С каким именно статусом
+    // ставить можно, решает статусная машина задатка (T-034) — здесь только
+    // сверка с её ответом, а не своя копия правила.
+    if (row.deposit_status !== BIDDING_ALLOWED_FROM) {
       return 'NO_DEPOSIT';
     }
 
     return null;
   }
+}
+
+/** Строка ответа на единственный запрос допуска. Имена — как в SQL. */
+interface EligibilityRow {
+  readonly user_status: string | null;
+  readonly egov_verified_at: Date | null;
+  readonly seller_id: string | null;
+  readonly deposit_status: string | null;
 }
