@@ -206,6 +206,35 @@ describe('T-045: ВЕТО и Цифровой Карантин', () => {
     expect(stored.lockoutUntil).toBeNull();
   });
 
+  it('регресс: подтверждение сделки можно повторить после сбоя', async () => {
+    /**
+     * CLOSED — статус терминальный, а счёт победителю выставляется уже после
+     * него и через сеть. Отказ банка в этот момент раньше делал сделку тупиком:
+     * повторное подтверждение отвечало «лот не в статусе FINISHED», и довести
+     * дело до конца было нечем.
+     */
+    const owner = await seller();
+    const lotId = await finishedLot(owner.token, randomCadastre());
+
+    await api()
+      .post(`/api/lots/${lotId}/confirm`)
+      .set(...auth(owner.token))
+      .expect(200);
+
+    // Повтор на уже закрытом лоте — штатный путь, а не конфликт.
+    const again = await api()
+      .post(`/api/lots/${lotId}/confirm`)
+      .set(...auth(owner.token))
+      .expect(200);
+    expect(again.body).toMatchObject({ status: 'CLOSED' });
+
+    // Право ВЕТО при этом закрыто: сделка подтверждена, отыграть назад нельзя.
+    await api()
+      .post(`/api/lots/${lotId}/veto`)
+      .set(...auth(owner.token))
+      .expect(409);
+  });
+
   it('чужой лот и незавершённые торги решению не подлежат', async () => {
     const owner = await seller();
     const stranger = await seller();

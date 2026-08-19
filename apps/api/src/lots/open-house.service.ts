@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 
 import type { AuthenticatedUser } from '../auth/auth.types';
+import { isUniqueViolation } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 import { TimeService } from '../time/time.service';
 
@@ -163,14 +164,4 @@ export class OpenHouseService {
       throw new NotFoundException({ code: 'BOOKING_NOT_FOUND' });
     }
   }
-}
-
-/** Код P2002 — нарушение уникальности в Prisma. */
-function isUniqueViolation(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === 'P2002'
-  );
 }

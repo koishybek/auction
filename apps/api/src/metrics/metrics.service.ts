@@ -94,6 +94,14 @@ export class MetricsService {
    */
   private readonly finishUnpersisted: Gauge<never>;
 
+  /**
+   * Доплаты, по которым счёт так и не ушёл в банк.
+   *
+   * Лот при этом закрыт необратимо, а победителю платить не по чему: без этого
+   * числа о таком узнают от самого победителя.
+   */
+  private readonly paymentInvoicesMissing: Gauge<never>;
+
   constructor() {
     /**
      * Стандартные метрики процесса: CPU, память, GC, задержка event loop.
@@ -188,6 +196,12 @@ export class MetricsService {
       help: 'Торгов закрыто в Redis, но не зафиксировано в PostgreSQL: нет ни возвратов, ни протокола',
       registers: [this.registry],
     });
+
+    this.paymentInvoicesMissing = new Gauge({
+      name: 'auction_payment_invoices_missing',
+      help: 'Доплат без выставленного счёта: сделка закрыта, а платить победителю не по чему',
+      registers: [this.registry],
+    });
   }
 
   /** Полный путь ставки. Секунды, потому что Prometheus меряет в секундах. */
@@ -251,6 +265,11 @@ export class MetricsService {
   /** Сколько закрытых лотов ждут фиксации в PostgreSQL. Норма — ноль. */
   setFinishUnpersisted(count: number): void {
     this.finishUnpersisted.set(count);
+  }
+
+  /** Сколько доплат ждут счёта в банке. Норма — ноль. */
+  setPaymentInvoicesMissing(count: number): void {
+    this.paymentInvoicesMissing.set(count);
   }
 
   /** Текст в формате экспозиции Prometheus. */

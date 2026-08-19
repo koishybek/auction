@@ -2,6 +2,7 @@ import { createHash, randomInt } from 'node:crypto';
 
 import { Injectable } from '@nestjs/common';
 
+import { isUniqueViolation } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 
 /**
@@ -121,9 +122,4 @@ function deterministicCode(userId: string, lotId: string, width: number): string
   const digest = createHash('sha256').update(`${userId}:${lotId}`).digest();
   const value = digest.readUInt32BE(0) % 10 ** width;
   return String(value).padStart(width, '0');
-}
-
-/** Нарушение уникальности в PostgreSQL. */
-function isUniqueViolation(error: unknown): boolean {
-  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
 }

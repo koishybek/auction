@@ -145,6 +145,52 @@ describe('T-046: расщепление доплаты', () => {
     expect(opened?.amountTiyn).toBe(deal.finalPriceTiyn - deal.depositTiyn);
   });
 
+  /**
+   * Регресс (T-057): отказ банка на счёте не оставляет сделку тупиком.
+   *
+   * Подтверждение сделки переводит лот в CLOSED — статус терминальный, — и
+   * только потом выставляет счёт, а счёт идёт по сети. Раньше отказ банка в этот
+   * момент означал: лот закрыт навсегда, строка доплаты есть, счёта нет, и
+   * повторить нечем — победитель не получал реквизитов вообще никогда.
+   */
+  it('регресс: счёт, не ушедший в банк, выставляется повторным заходом', async () => {
+    const deal = await closedDeal();
+
+    bank.failInvoiceOnce();
+    await expect(payments.openForWinner(deal.lotId)).rejects.toThrow(/банк недоступен/u);
+
+    // Строка доплаты создана, счёта нет — ровно то состояние, из которого
+    // раньше не было выхода.
+    const stuck = await prisma.payment.findUniqueOrThrow({ where: { lotId: deal.lotId } });
+    expect(stuck.status).toBe('PENDING');
+    expect(stuck.invoiceRef).toBeNull();
+    expect(bank.invoicesSent()).toHaveLength(0);
+    expect(await payments.missingInvoiceCount()).toBe(1);
+
+    // Сверка доводит дело до конца — той же строкой доплаты, без второй.
+    expect(await payments.retryMissingInvoices()).toBe(1);
+    const fixed = await prisma.payment.findUniqueOrThrow({ where: { lotId: deal.lotId } });
+    expect(fixed.id).toBe(stuck.id);
+    expect(fixed.invoiceRef).not.toBeNull();
+    expect(bank.invoicesSent()).toHaveLength(1);
+    expect(await payments.missingInvoiceCount()).toBe(0);
+
+    // Повторный заход ничего не делает: счёт уже выставлен.
+    expect(await payments.retryMissingInvoices()).toBe(0);
+    expect(bank.invoicesSent()).toHaveLength(1);
+  });
+
+  it('повторное открытие доплаты не выставляет второй счёт', async () => {
+    const deal = await closedDeal();
+    const first = await payments.openForWinner(deal.lotId);
+    const second = await payments.openForWinner(deal.lotId);
+
+    // Одна доплата на лот — и это ограничение базы, а не порядок вызовов.
+    expect(second?.paymentId).toBe(first?.paymentId);
+    expect(await prisma.payment.count({ where: { lotId: deal.lotId } })).toBe(1);
+    expect(bank.invoicesSent()).toHaveLength(1);
+  });
+
   it('DoD: сумма долей равна платежу, поручения ушли в банк', async () => {
     const deal = await closedDeal(500_000_00n);
     const opened = await payments.openForWinner(deal.lotId);

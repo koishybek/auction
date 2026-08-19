@@ -305,12 +305,19 @@ model Payment {
   amountTiyn BigInt        @map("amount_tiyn")
   status     PaymentStatus @default(PENDING)
   bankRef    String?       @map("bank_ref")
+  /// Ссылка выставленного счёта. Пусто = счёт в банк не ушёл, и его надо
+  /// выставить повторно: лот уже закрыт, а победителю платить не по чему.
+  invoiceRef String?       @map("invoice_ref")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
 
   splits PayoutSplit[]
 
+  // Одна доплата на лот. Инвариант держит база, а не порядок вызовов: между
+  // проверкой «доплата уже есть» и её созданием есть окно, в которое пролезают
+  // два одновременных подтверждения сделки — и победитель получает два счёта.
+  @@unique([lotId])
   @@index([status])
   @@map("payments")
 }

@@ -1,5 +1,7 @@
 import { ConflictException, ForbiddenException, Injectable, Logger } from '@nestjs/common';
 
+import type { LotStatus } from '../generated/prisma/enums';
+
 import { VetoActService } from '../documents/veto-act.service';
 import { PaymentsService } from '../payments/payments.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -48,13 +50,23 @@ export class VetoService {
    * Доплата открывается именно здесь, а не сразу после торгов: пока продавец
    * не подтвердил сделку, он может её отклонить правом ВЕТО, и счёт,
    * выставленный заранее, пришлось бы отзывать (FR-17 → INT-03).
+   *
+   * Повторный вызов на уже закрытом лоте — не ошибка, а штатный путь.
+   * `CLOSED` — состояние терминальное, а счёт выставляется после него и через
+   * сеть: банк может ответить отказом ровно в этот момент. Раньше повтор
+   * упирался в «лот не в статусе FINISHED», и сделка оставалась закрытой со
+   * счётом, которого нет, — без единого способа довести её до конца.
    */
   async confirm(
     lotId: string,
     sellerId: string,
   ): Promise<{ status: 'CLOSED'; paymentId: string | null }> {
-    await this.requireOwnFinishedLot(lotId, sellerId);
-    await this.lots.transition({ lotId, to: 'CLOSED', actor: 'SELLER', actorId: sellerId });
+    const lot = await this.requireOwnLot(lotId, sellerId);
+    if (lot.status === 'FINISHED') {
+      await this.lots.transition({ lotId, to: 'CLOSED', actor: 'SELLER', actorId: sellerId });
+    } else if (lot.status !== 'CLOSED') {
+      throw new ConflictException({ code: 'LOT_NOT_FINISHED' });
+    }
 
     const payment = await this.payments.openForWinner(lotId);
     return { status: 'CLOSED', paymentId: payment?.paymentId ?? null };
@@ -84,6 +96,14 @@ export class VetoService {
   }
 
   private async requireOwnFinishedLot(lotId: string, sellerId: string): Promise<void> {
+    const lot = await this.requireOwnLot(lotId, sellerId);
+    if (lot.status !== 'FINISHED') {
+      throw new ConflictException({ code: 'LOT_NOT_FINISHED' });
+    }
+  }
+
+  /** Лот продавца — без требований к статусу. Статус проверяет вызывающий. */
+  private async requireOwnLot(lotId: string, sellerId: string): Promise<{ status: LotStatus }> {
     const lot = await this.prisma.lot.findUnique({
       where: { id: lotId },
       select: { sellerId: true, status: true },
@@ -92,8 +112,6 @@ export class VetoService {
       // Не «404 против 403»: чужой лот для продавца не существует.
       throw new ForbiddenException({ code: 'LOT_NOT_OWNED' });
     }
-    if (lot.status !== 'FINISHED') {
-      throw new ConflictException({ code: 'LOT_NOT_FINISHED' });
-    }
+    return { status: lot.status };
   }
 }

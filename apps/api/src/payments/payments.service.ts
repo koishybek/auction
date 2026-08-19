@@ -8,6 +8,7 @@ import {
   type BankWebhookEvent,
   type SplitPart,
 } from '../integrations/bank/bank.types';
+import { isUniqueViolation } from '../prisma/prisma-errors';
 import { PrismaService } from '../prisma/prisma.service';
 
 import { splitPayment } from './splitter';
@@ -43,11 +44,20 @@ export class PaymentsService {
    * ещё некому.
    */
   async openForWinner(lotId: string): Promise<{ paymentId: string; amountTiyn: bigint } | null> {
-    const existing = await this.prisma.payment.findFirst({
+    const existing = await this.prisma.payment.findUnique({
       where: { lotId },
-      select: { id: true, amountTiyn: true },
+      select: { id: true, amountTiyn: true, invoiceRef: true },
     });
     if (existing !== null) {
+      // Строка есть — но счёт мог не уйти: банк отвечает по сети, и отказ
+      // приходится ровно на момент, когда лот уже переведён в CLOSED. Раньше
+      // этот путь возвращался молча, и победитель не получал счёта никогда.
+      await this.ensureInvoice({
+        paymentId: existing.id,
+        lotId,
+        amountTiyn: existing.amountTiyn,
+        invoiceRef: existing.invoiceRef,
+      });
       return { paymentId: existing.id, amountTiyn: existing.amountTiyn };
     }
 
@@ -70,28 +80,112 @@ export class PaymentsService {
     const creditedTiyn = deposit?.status === 'ON_SPECIAL_ACCOUNT' ? deposit.amountTiyn : 0n;
     const amountTiyn = session.winnerBid.amountTiyn - creditedTiyn;
 
-    const payment = await this.prisma.payment.create({
-      data: {
-        lotId,
-        winnerUserId: session.winnerBid.userId,
-        amountTiyn: amountTiyn > 0n ? amountTiyn : 0n,
-        status: 'PENDING',
-      },
-      select: { id: true, amountTiyn: true },
-    });
+    // Уникальный ключ по лоту не даст создать вторую доплату, даже если два
+    // подтверждения сделки придут одновременно. Проигравшая гонку сторона
+    // читает чужую строку и работает с ней, а не падает.
+    const payment = await this.prisma.payment
+      .create({
+        data: {
+          lotId,
+          winnerUserId: session.winnerBid.userId,
+          amountTiyn: amountTiyn > 0n ? amountTiyn : 0n,
+          status: 'PENDING',
+        },
+        select: { id: true, amountTiyn: true, invoiceRef: true },
+      })
+      .catch(async (error: unknown) => {
+        if (!isUniqueViolation(error)) {
+          throw error;
+        }
+        return await this.prisma.payment.findUniqueOrThrow({
+          where: { lotId },
+          select: { id: true, amountTiyn: true, invoiceRef: true },
+        });
+      });
 
-    await this.bank.createInvoice({
-      reference: payment.id,
+    await this.ensureInvoice({
+      paymentId: payment.id,
+      lotId,
       amountTiyn: payment.amountTiyn,
-      iban: PLATFORM_ACCOUNT_IBAN,
-      kbe: KBE_LEGAL_ENTITY,
-      purpose: `Доплата по лоту ${lotId}`,
+      invoiceRef: payment.invoiceRef,
     });
 
     this.logger.log(
       `Лот ${lotId}: победителю выставлена доплата ${String(payment.amountTiyn / 100n)} ₸`,
     );
     return { paymentId: payment.id, amountTiyn: payment.amountTiyn };
+  }
+
+  /**
+   * Выставить счёт, если он ещё не выставлен.
+   *
+   * Факт отправки — это `invoice_ref` в базе, а не то, что вызов однажды
+   * состоялся. Разница видна ровно в том случае, ради которого всё написано:
+   * лот закрыт необратимо, а банк на счёт ответил ошибкой. Тогда строка доплаты
+   * есть, ссылки нет, и повторный заход (или сверка) доводит дело до конца.
+   */
+  private async ensureInvoice(input: {
+    paymentId: string;
+    lotId: string;
+    amountTiyn: bigint;
+    invoiceRef: string | null;
+  }): Promise<void> {
+    if (input.invoiceRef !== null && input.invoiceRef !== '') {
+      return;
+    }
+    const invoice = await this.bank.createInvoice({
+      reference: input.paymentId,
+      amountTiyn: input.amountTiyn,
+      iban: PLATFORM_ACCOUNT_IBAN,
+      kbe: KBE_LEGAL_ENTITY,
+      purpose: `Доплата по лоту ${input.lotId}`,
+    });
+    await this.prisma.payment.update({
+      where: { id: input.paymentId },
+      data: { invoiceRef: invoice.invoiceId },
+    });
+  }
+
+  /**
+   * Сверка: доплаты, счёт по которым так и не ушёл в банк.
+   *
+   * Нужна по той же причине, что и сверка возвратов: подтверждение сделки —
+   * обычный код, а банк — сеть. Без сверки лот остаётся закрытым со счётом,
+   * которого нет, и узнать об этом можно только от победителя, который ждёт
+   * реквизиты. Возвращает число доведённых до конца.
+   */
+  async retryMissingInvoices(limit = 20): Promise<number> {
+    const pending = await this.prisma.payment.findMany({
+      where: { status: 'PENDING', invoiceRef: null },
+      select: { id: true, lotId: true, amountTiyn: true },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+
+    let sent = 0;
+    for (const payment of pending) {
+      try {
+        await this.ensureInvoice({
+          paymentId: payment.id,
+          lotId: payment.lotId,
+          amountTiyn: payment.amountTiyn,
+          invoiceRef: null,
+        });
+        sent += 1;
+        this.logger.warn(`Лот ${payment.lotId}: счёт на доплату выставлен повторным заходом`);
+      } catch (error) {
+        this.logger.error(
+          `Лот ${payment.lotId}: счёт на доплату так и не ушёл — ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    return sent;
+  }
+
+  /** Сколько доплат ждут счёта. Ноль — норма. */
+  async missingInvoiceCount(): Promise<number> {
+    return await this.prisma.payment.count({ where: { status: 'PENDING', invoiceRef: null } });
   }
 
   /**

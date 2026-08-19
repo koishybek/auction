@@ -2,6 +2,8 @@ import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@ne
 
 import { RefundService } from '../deposits/refund.service';
 import { RunnerUpService } from '../deposits/runner-up.service';
+import { MetricsService } from '../metrics/metrics.service';
+import { PaymentsService } from '../payments/payments.service';
 
 /**
  * Как часто разбирается очередь возвратов.
@@ -34,6 +36,8 @@ export class RefundWorker implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly refunds: RefundService,
     private readonly runnerUp: RunnerUpService,
+    private readonly payments: PaymentsService,
+    private readonly metrics: MetricsService,
   ) {}
 
   onModuleInit(): void {
@@ -68,6 +72,12 @@ export class RefundWorker implements OnModuleInit, OnModuleDestroy {
         // Реже, чем отправка: обе проверки — про забытое, а не про срочное.
         await this.refunds.reconcileFinishedLots();
         await this.refunds.overdue();
+
+        // Счета на доплату живут здесь же не для экономии таймера: это тот же
+        // разговор с банком, та же периодичность и та же цена ошибки — деньги,
+        // застрявшие между закрытым лотом и участником.
+        await this.payments.retryMissingInvoices();
+        this.metrics.setPaymentInvoicesMissing(await this.payments.missingInvoiceCount());
       }
       return sent;
     } catch (error) {

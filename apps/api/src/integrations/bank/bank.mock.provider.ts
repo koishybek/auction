@@ -35,8 +35,15 @@ export class BankMockProvider implements BankProvider {
   private failNext = false;
   private failRefund = false;
   private failSplit = false;
+  private failInvoice = false;
 
   createInvoice(request: InvoiceRequest): Promise<InvoiceResult> {
+    if (this.failInvoice) {
+      // Отказ ДО записи: невыставленный счёт — это счёт, которого нет. Именно в
+      // этот момент сделка уже закрыта необратимо, и путь должен быть повторяем.
+      this.failInvoice = false;
+      return Promise.reject(new Error('банк недоступен: счёт не выставлен'));
+    }
     this.invoices.push(request);
     const invoiceId = `inv-${randomUUID()}`;
     // Реквизиты и суммы в лог не пишем: платёжные данные живут не дольше запроса.
@@ -98,6 +105,11 @@ export class BankMockProvider implements BankProvider {
     this.failNext = true;
   }
 
+  /** Следующий счёт на доплату банк не примет. */
+  failInvoiceOnce(): void {
+    this.failInvoice = true;
+  }
+
   /** Следующее поручение на возврат банк отклонит. */
   failRefundOnce(): void {
     this.failRefund = true;
@@ -132,5 +144,6 @@ export class BankMockProvider implements BankProvider {
     this.failNext = false;
     this.failRefund = false;
     this.failSplit = false;
+    this.failInvoice = false;
   }
 }
