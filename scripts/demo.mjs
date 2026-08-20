@@ -13,10 +13,13 @@
  * админской ручкой. Писать напрямую в базу нельзя — так демо показывало бы
  * состояния, которых система сама не создаёт.
  *
- * База — рабочая dev-база (не тестовая): демо остаётся между запусками, и
- * прогон тестов его не сносит. Пространство имён в Redis своё по той же причине.
+ * База своя — `auction_demo`, и создаётся заново на каждый запуск. Первая
+ * версия стенда ходила в рабочую dev-базу и оставляла там всё, что насоздавала:
+ * через полчаса каталог показывал полсотни одинаковых лотов по одной цене — то
+ * есть ровно то, чего показывать нельзя. Демо-данные живут в демо-базе.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -53,9 +56,14 @@ if (!existsSync(resolve(ROOT, 'apps/api/dist/main.js'))) {
  * запускается собранным и с NODE_ENV=production — иначе Next отдаёт клиентские
  * чанки с 403 и страница не гидратируется.
  */
+const demoUrl = new URL(process.env.DATABASE_URL);
+demoUrl.pathname = '/auction_demo';
+
 const env = {
   ...process.env,
   NODE_ENV: 'development',
+  DATABASE_URL: demoUrl.toString(),
+  DIRECT_URL: demoUrl.toString(),
   API_PORT: String(API_PORT),
   GATEWAY_PORT: String(GATEWAY_PORT),
   API_BASE_URL: API_URL,
@@ -155,11 +163,66 @@ async function whoami(token) {
  * покажет.
  */
 const CATALOG = [
-  { type: 'REALTY', object: 'KZ-ALM-01-042-118', priceTenge: 46_350_000, phase: 'PHASE_III' },
-  { type: 'REALTY', object: 'KZ-AST-02-311-004', priceTenge: 78_900_000, phase: 'PHASE_II' },
-  { type: 'REALTY', object: 'KZ-SHM-03-127-559', priceTenge: 21_400_000, phase: 'PHASE_I' },
-  { type: 'VEHICLE', object: 'JTDBR32E320012345', priceTenge: 12_750_000, phase: 'PHASE_II' },
-  { type: 'VEHICLE', object: 'WBA3A5C51DF599111', priceTenge: 9_300_000, phase: 'PHASE_I' },
+  {
+    type: 'REALTY',
+    object: 'KZ-ALM-01-042-118',
+    priceTenge: 46_350_000,
+    phase: 'PHASE_III',
+    title: 'Трёхкомнатная квартира, ЖК «Асыл Арман»',
+    address: 'Алматы, Бостандыкский район, ул. Розыбакиева 247',
+    areaSqmX100: 8740,
+    buildYear: 2019,
+    description:
+      'Просторная квартира на девятом этаже двенадцатиэтажного дома, окна во двор. Санузел раздельный, кухня-гостиная, застеклённая лоджия. Дом сдан в 2019 году, паркинг во дворе. Объект свободен от проживающих, продаётся по решению залогодержателя.',
+  },
+  {
+    type: 'REALTY',
+    object: 'KZ-AST-02-311-004',
+    priceTenge: 78_900_000,
+    phase: 'PHASE_II',
+    title: 'Коммерческое помещение на первой линии',
+    address: 'Астана, район Есиль, проспект Мангилик Ел 55',
+    areaSqmX100: 14200,
+    buildYear: 2021,
+    description:
+      'Помещение свободного назначения с отдельным входом и витринными окнами. Подходит под аптеку, банковское отделение или кофейню: пешеходный трафик, парковка на восемь мест. Электрическая мощность 30 кВт, вентиляция заведена.',
+  },
+  {
+    type: 'REALTY',
+    object: 'KZ-SHM-03-127-559',
+    priceTenge: 21_400_000,
+    phase: 'PHASE_I',
+    title: 'Двухкомнатная квартира у парка',
+    address: 'Шымкент, Аль-Фарабийский район, ул. Тауке хана 41',
+    areaSqmX100: 5210,
+    buildYear: 2007,
+    description:
+      'Квартира в кирпичном доме напротив центрального парка. Требует косметического ремонта, планировка не менялась. Продаётся с погашением задолженности перед банком из средств сделки.',
+  },
+  {
+    type: 'VEHICLE',
+    object: 'JTDBR32E320012345',
+    priceTenge: 12_750_000,
+    phase: 'PHASE_II',
+    title: 'Toyota Camry 2.5 AT',
+    address: 'Алматы, стоянка на пр. Райымбека 212',
+    mileageKm: 84_000,
+    buildYear: 2021,
+    description:
+      'Один владелец по документам, сервисная история в официальном дилерском центре. Комплектация Prestige: кожаный салон, камеры кругового обзора, подогрев сидений. Кузов без окрасов, проверка по реестру залогов пройдена.',
+  },
+  {
+    type: 'VEHICLE',
+    object: 'WBA3A5C51DF599111',
+    priceTenge: 9_300_000,
+    phase: 'PHASE_I',
+    title: 'BMW 320i xDrive',
+    address: 'Караганда, ул. Ерубаева 18, крытый паркинг',
+    mileageKm: 142_500,
+    buildYear: 2017,
+    description:
+      'Полный привод, зимняя резина в комплекте. Двигатель и коробка без вмешательств, замена ремня и масла по регламенту. Изымается по решению суда, продаётся с торгов.',
+  },
 ];
 
 async function seed() {
@@ -179,8 +242,16 @@ async function seed() {
       token: sellerToken,
       body: {
         type: item.type,
-        cadastreOrVin: `${item.object}-${String(Math.floor(Math.random() * 1000))}`,
+        // База чистая на каждый запуск, поэтому номер объекта настоящий, без
+        // случайного хвоста: он и должен выглядеть как кадастровый номер.
+        cadastreOrVin: item.object,
         startPriceTenge: item.priceTenge,
+        title: item.title,
+        address: item.address,
+        description: item.description,
+        ...(item.areaSqmX100 === undefined ? {} : { areaSqmX100: item.areaSqmX100 }),
+        ...(item.mileageKm === undefined ? {} : { mileageKm: item.mileageKm }),
+        ...(item.buildYear === undefined ? {} : { buildYear: item.buildYear }),
       },
     });
     await call(`/api/lots/${lot.id}/submit`, { token: sellerToken });
@@ -196,9 +267,9 @@ async function seed() {
   }
 
   const live = created.find((lot) => lot.phase === 'PHASE_III');
-  await openTrading(live.id, admin);
+  const investors = await openTrading(live.id, admin);
 
-  return { live, created, admin, sellerToken };
+  return { live, created, admin, sellerToken, investors };
 }
 
 /**
@@ -212,11 +283,18 @@ async function seed() {
 async function openTrading(lotId, admin) {
   await call(`/api/admin/lots/${lotId}/auction/start`, { token: admin });
 
-  const token = await egovLogin('Демонстрационный Инвестор');
-  await call(`/api/lots/${lotId}/deposit/invoice`, { token });
-  await call(`/api/lots/${lotId}/deposit/dev-pay`, { token });
+  // Двое, а не один: перебивать собственную последнюю ставку запрещено, и
+  // поддерживать торги живыми в одиночку невозможно — как и в реальности.
+  const investors = [];
+  for (const fio of ['Демонстрационный Инвестор', 'Второй Инвестор Демо']) {
+    const token = await egovLogin(fio);
+    await call(`/api/lots/${lotId}/deposit/invoice`, { token });
+    await call(`/api/lots/${lotId}/deposit/dev-pay`, { token });
+    investors.push(token);
+  }
 
-  await placeBid(lotId, token);
+  await placeBid(lotId, investors[0]);
+  return investors;
 }
 
 /**
@@ -265,53 +343,80 @@ async function placeBid(lotId, token) {
 }
 
 /**
- * Держать один лот в идущих торгах — ПОВЕДЕНИЕ ТОЛЬКО ДЕМО-СТЕНДА.
+ * Держать торги живыми — ПОВЕДЕНИЕ ТОЛЬКО ДЕМО-СТЕНДА.
  *
- * Пятьдесят секунд тишины закрывают лот навсегда, и это правило системы, а не
- * недосмотр: в проде закрытый лот закрыт. Но человек, открывший ссылку через
- * полчаса после запуска стенда, должен увидеть живые торги, а не пять
- * завершённых. Поэтому здесь, и только здесь, на месте закрывшегося лота
- * открывается следующий.
+ * Пятьдесят секунд тишины закрывают лот навсегда, и это правило системы. Но
+ * ссылка, которую даёшь человеку, не должна протухать за минуту: открыв её
+ * через полчаса, он обязан увидеть идущие торги, а не архив.
+ *
+ * Первая версия стенда на месте закрывшегося лота открывала новый — и за час
+ * наплодила полсотни одинаковых карточек, превратив каталог в свалку. Поэтому
+ * теперь лот один и тот же, а живым он остаётся ставками: два демо-участника
+ * ставят по очереди раз в тридцать пять секунд. Перебивать самого себя нельзя —
+ * отсюда и двое. Цена при этом растёт по-настоящему, шагами +3 %, как и должна.
  */
-function keepOneLive(state) {
-  const CHECK_MS = 10_000;
+function keepAlive(state) {
+  const BID_EVERY_MS = 35_000;
   const timer = setInterval(() => {
     void (async () => {
       try {
         const lot = await call(`/api/lots/${state.liveId}`, { method: 'GET' });
-        if (lot.status === 'PHASE_III') return;
-
-        const seller = state.sellerToken;
-        const fresh = await call('/api/lots', {
-          token: seller,
-          body: {
-            type: 'REALTY',
-            cadastreOrVin: `KZ-ALM-01-042-${String(Math.floor(Math.random() * 1_000_000))}`,
-            startPriceTenge: 46_350_000,
-          },
-        });
-        await call(`/api/lots/${fresh.id}/submit`, { token: seller });
-        for (const to of ['PHASE_I', 'PHASE_II']) {
-          await call(`/api/admin/lots/${fresh.id}/status`, {
-            method: 'PATCH',
-            token: state.admin,
-            body: { to, reason: 'демо-стенд: следующие торги' },
-          });
+        if (lot.status !== 'PHASE_III') {
+          console.log(
+            '[демо] торги закрылись — стенд их больше не поднимает, перезапустите pnpm demo',
+          );
+          clearInterval(timer);
+          return;
         }
-        await openTrading(fresh.id, state.admin);
-        state.liveId = fresh.id;
-        console.log(
-          `[демо] прежний лот закрылся, открыты новые торги: ${WEB_URL}/lots/${fresh.id}`,
-        );
+        state.turn = (state.turn + 1) % state.investors.length;
+        await placeBid(state.liveId, state.investors[state.turn]);
       } catch (error) {
-        console.error(
-          '[демо] не удалось открыть следующие торги:',
-          error instanceof Error ? error.message : error,
-        );
+        console.error('[демо] ставка не прошла:', error instanceof Error ? error.message : error);
       }
     })();
-  }, CHECK_MS);
+  }, BID_EVERY_MS);
   timer.unref?.();
+}
+
+/**
+ * Пересоздать демо-базу и накатить миграции.
+ *
+ * Каждый запуск с чистого листа: демо показывает витрину, а не археологию
+ * прошлых прогонов. Рабочую базу это не трогает — у демо своя.
+ */
+function resetDemoDatabase() {
+  const admin = new URL(demoUrl.toString());
+  admin.pathname = '/postgres';
+  const query = (sql) =>
+    spawnSync(
+      process.execPath,
+      [
+        '-e',
+        `const {Client}=require(${JSON.stringify(resolve(ROOT, 'e2e/node_modules/pg'))});` +
+          `const c=new Client(${JSON.stringify(admin.toString())});` +
+          `c.connect().then(()=>c.query(${JSON.stringify(sql)})).then(()=>c.end()).catch((e)=>{console.error(e.message);process.exit(1)})`,
+      ],
+      { stdio: 'inherit' },
+    );
+
+  // Отключаем чужие соединения: своя же прошлая копия стенда могла остаться.
+  query(
+    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'auction_demo' AND pid <> pg_backend_pid()`,
+  );
+  query('DROP DATABASE IF EXISTS auction_demo');
+  if (query('CREATE DATABASE auction_demo').status !== 0) {
+    throw new Error('не удалось создать базу auction_demo');
+  }
+
+  const migrated = spawnSync('pnpm', ['exec', 'prisma', 'migrate', 'deploy'], {
+    cwd: resolve(ROOT, 'apps/api'),
+    env,
+    stdio: 'ignore',
+    shell: true,
+  });
+  if (migrated.status !== 0) {
+    throw new Error('миграции на демо-базу не накатились');
+  }
 }
 
 /**
@@ -334,9 +439,55 @@ async function smokeCheck(live) {
   if (!catalog.includes('₸')) {
     throw new Error('каталог отрисовался без цен — web не достучался до API');
   }
+  if (!catalog.includes('Асыл Арман')) {
+    throw new Error('каталог отрисовался без названий объектов — витрина не доехала');
+  }
+}
+
+/**
+ * Проверить, что порты свободны.
+ *
+ * Без этой проверки прошлая копия стенда убивает новую молча: процесс, которому
+ * занят порт метрик, просто не поднимается — так и задумано, — а стенд об этом
+ * не знает и печатает «поднят». Именно так у воркера и вышло: web с API жили,
+ * ставки в базу не доезжали, и понять это по экрану было нельзя.
+ */
+async function requireFreePorts() {
+  const ports = [
+    [API_PORT, 'API'],
+    [GATEWAY_PORT, 'gateway'],
+    [WEB_PORT, 'web'],
+    [9484, 'метрики API'],
+    [9485, 'метрики gateway'],
+    [9486, 'метрики воркера'],
+  ];
+  const busy = [];
+  for (const [port, label] of ports) {
+    const free = await new Promise((done) => {
+      const probe = createServer();
+      probe.once('error', () => {
+        done(false);
+      });
+      probe.once('listening', () => {
+        probe.close(() => {
+          done(true);
+        });
+      });
+      probe.listen(port, '127.0.0.1');
+    });
+    if (!free) busy.push(`${String(port)} (${label})`);
+  }
+  if (busy.length > 0) {
+    throw new Error(
+      `порты заняты: ${busy.join(', ')}. Обычно это прошлый стенд — остановите его (Ctrl+C) и запустите снова`,
+    );
+  }
 }
 
 try {
+  await requireFreePorts();
+  console.log('[демо] готовлю чистую базу auction_demo…');
+  resetDemoDatabase();
   console.log('[демо] поднимаю API, gateway, воркер и web…');
   start('api', process.execPath, ['dist/main.js'], 'apps/api', { METRICS_PORT: '9484' });
   start('gateway', process.execPath, ['dist/main.gateway.js'], 'apps/api', {
@@ -351,12 +502,15 @@ try {
 
   await waitFor(`${API_URL}/api/health`, 'API');
   await waitFor(`http://127.0.0.1:${String(GATEWAY_PORT)}/health`, 'gateway');
+  // У воркера нет HTTP-слоя, зато есть порт метрик: другой пробы живости у него
+  // не существует, а без воркера ставки не доезжают в базу и торги не
+  // закрываются — то есть продукт наполовину мёртв.
+  await waitFor('http://127.0.0.1:9486/metrics', 'воркер');
   await waitFor(WEB_URL, 'web');
 
-  const { live, admin, sellerToken } = await seed();
+  const { live, investors } = await seed();
   await smokeCheck(live);
-  const liveState = { liveId: live.id, admin, sellerToken };
-  keepOneLive(liveState);
+  keepAlive({ liveId: live.id, investors, turn: 0 });
 
   console.log('');
   console.log('════════════════════════════════════════════════════════');
@@ -364,7 +518,7 @@ try {
   console.log('════════════════════════════════════════════════════════');
   console.log(`  Каталог:      ${WEB_URL}`);
   console.log(`  Живые торги:  ${WEB_URL}/lots/${live.id}`);
-  console.log('                (закроются по тишине — стенд сам откроет следующие)');
+  console.log('                (ссылка постоянная: стенд ставит раз в 35 с и держит торги живыми)');
   console.log(`  Вход:         ${WEB_URL}/login`);
   console.log(`  Кабинет:      ${WEB_URL}/seller  и  ${WEB_URL}/partner`);
   console.log(`  API и /docs:  ${API_URL}/docs`);

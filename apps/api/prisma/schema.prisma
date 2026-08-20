@@ -125,6 +125,18 @@ model Lot {
   cadastreOrVin String    @map("cadastre_or_vin")
   status        LotStatus @default(DRAFT)
 
+  /// Витрина: то, по чему человек выбирает объект, а не идентифицирует его.
+  /// Всё необязательное — лот заводится раньше, чем собраны материалы, и
+  /// пустая карточка честнее отказа в подаче.
+  title       String? 
+  address     String?
+  description String?
+  /// Площадь в сотых квадратного метра: целое число вместо дроби, по той же
+  /// причине, что и деньги в тиынах.
+  areaSqmX100 Int?    @map("area_sqm_x100")
+  mileageKm   Int?    @map("mileage_km")
+  buildYear   Int?    @map("build_year")
+
   sellerId String @map("seller_id") @db.Uuid
   seller   User   @relation("LotSeller", fields: [sellerId], references: [id])
 

@@ -33,6 +33,20 @@ export interface LotView {
   readonly type: LotType;
   readonly cadastreOrVin: string;
   readonly status: LotStatusValue;
+  /**
+   * Витрина объекта. Всё необязательное: лот заводится раньше, чем собраны
+   * материалы, и пустая карточка честнее отказа в подаче.
+   *
+   * Кадастровый номер и VIN объект ИДЕНТИФИЦИРУЮТ, но выбрать по ним нельзя —
+   * каталог из одних номеров выглядит выгрузкой из реестра, а не витриной.
+   */
+  readonly title: string | null;
+  readonly address: string | null;
+  readonly description: string | null;
+  /** Площадь в сотых квадратного метра: целое, как и деньги в тиынах. */
+  readonly areaSqmX100: number | null;
+  readonly mileageKm: number | null;
+  readonly buildYear: number | null;
   readonly startPriceTenge: number;
   readonly currentPriceTenge: number | null;
   readonly sellerId: string;

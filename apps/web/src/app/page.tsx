@@ -4,7 +4,7 @@ import Link from 'next/link';
 
 import { PhaseRatchet } from '@/components/phase-ratchet';
 import { getLots } from '@/lib/api-client';
-import { formatTenge, lotTypeLabel } from '@/lib/format';
+import { formatTenge, lotTypeLabel, objectFacts } from '@/lib/format';
 
 // Каталог отражает живые торги: кэшировать его значит показывать вчерашние цены.
 export const dynamic = 'force-dynamic';
@@ -91,28 +91,42 @@ function LotRow({ lot }: { lot: LotView }) {
 
   return (
     <tr className="border-b border-[var(--color-rule)] transition-colors hover:bg-[var(--color-ink-raised)]">
-      <td className="py-4 pr-4 align-middle">
+      <td className="py-4 pr-4 align-top">
         <PhaseRatchet status={lot.status} />
       </td>
-      <td className="py-4 pr-4 align-middle">
+      <td className="py-4 pr-4 align-top">
         {/*
-          Ссылка — на самом номере объекта, без растягивания на всю строку:
-          в таблице такой приём ломает выделение текста и порядок обхода
-          с клавиатуры. Цель увеличена padding'ом, строка подсвечивается.
+          Ссылка — на названии объекта, без растягивания на всю строку: в таблице
+          такой приём ломает выделение текста и порядок обхода с клавиатуры.
+          Цель увеличена padding'ом, строка подсвечивается.
+
+          Название и адрес идут первыми, а кадастровый номер — под ними мелким:
+          номер объект идентифицирует, но выбирают не по нему. Пока продавец не
+          заполнил витрину, первой строкой честно стоит номер — подставлять
+          вместо него выдуманный заголовок нельзя.
         */}
         <Link
           href={`/lots/${lot.id}`}
-          className="tabular -my-2 inline-block py-2 text-sm hover:text-[var(--color-signal)]"
+          className="-my-2 inline-block py-2 text-sm hover:text-[var(--color-signal)]"
         >
-          {lot.cadastreOrVin}
+          <span className={lot.title === null ? 'tabular' : ''}>
+            {lot.title ?? lot.cadastreOrVin}
+          </span>
           <span className="sr-only"> — открыть карточку лота</span>
         </Link>
         {isLive && <span className="ml-3 text-xs text-[var(--color-signal)]">торги идут</span>}
+        {lot.address !== null && (
+          <p className="mt-1 text-xs text-[var(--color-muted)]">{lot.address}</p>
+        )}
+        <p className="tabular mt-1 text-[0.6875rem] text-[var(--color-muted)]">
+          {lot.title === null ? '' : `${lot.cadastreOrVin} · `}
+          {objectFacts(lot)}
+        </p>
       </td>
-      <td className="py-4 pr-4 align-middle text-sm text-[var(--color-muted)]">
+      <td className="py-4 pr-4 align-top text-sm text-[var(--color-muted)]">
         {lotTypeLabel(lot.type)}
       </td>
-      <td className="tabular py-4 pl-4 text-right align-middle text-sm text-[var(--color-value)]">
+      <td className="tabular py-4 pl-4 text-right align-top text-sm text-[var(--color-value)]">
         {formatTenge(price)}
       </td>
     </tr>

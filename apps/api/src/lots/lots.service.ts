@@ -45,6 +45,12 @@ function toView(lot: Lot, viewsCount: number | null = null): LotView {
     type: lot.type,
     cadastreOrVin: lot.cadastreOrVin,
     status: lot.status,
+    title: lot.title,
+    address: lot.address,
+    description: lot.description,
+    areaSqmX100: lot.areaSqmX100,
+    mileageKm: lot.mileageKm,
+    buildYear: lot.buildYear,
     startPriceTenge: Number(toTenge(tiyn(lot.startPriceTiyn))),
     currentPriceTenge:
       lot.currentPriceTiyn === null ? null : Number(toTenge(tiyn(lot.currentPriceTiyn))),
@@ -72,6 +78,19 @@ export class LotsService {
     type: 'REALTY' | 'VEHICLE';
     cadastreOrVin: string;
     startPriceTenge: number;
+    /**
+     * Витрина. Необязательна: лот заводят раньше, чем собраны материалы.
+     *
+     * `| undefined` явно — при `exactOptionalPropertyTypes` «поля нет» и «поле
+     * есть со значением undefined» это разные типы, а из Zod-схемы приходит
+     * второе.
+     */
+    title?: string | undefined;
+    address?: string | undefined;
+    description?: string | undefined;
+    areaSqmX100?: number | undefined;
+    mileageKm?: number | undefined;
+    buildYear?: number | undefined;
   }): Promise<LotView> {
     const cadastreOrVin = input.cadastreOrVin.trim().toUpperCase();
 
@@ -98,6 +117,14 @@ export class LotsService {
         type: input.type,
         cadastreOrVin,
         startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)),
+        // Пустое поле остаётся пустым, а не превращается в пустую строку:
+        // «не заполнено» и «заполнено ничем» в карточке выглядят по-разному.
+        title: input.title ?? null,
+        address: input.address ?? null,
+        description: input.description ?? null,
+        areaSqmX100: input.areaSqmX100 ?? null,
+        mileageKm: input.mileageKm ?? null,
+        buildYear: input.buildYear ?? null,
       },
     });
 
@@ -138,6 +165,12 @@ export class LotsService {
     sellerId: string;
     cadastreOrVin?: string | undefined;
     startPriceTenge?: number | undefined;
+    title?: string | undefined;
+    address?: string | undefined;
+    description?: string | undefined;
+    areaSqmX100?: number | undefined;
+    mileageKm?: number | undefined;
+    buildYear?: number | undefined;
   }): Promise<LotView> {
     const lot = await this.requireOwnLot(input.lotId, input.sellerId);
     if (lot.status !== 'DRAFT') {
@@ -156,6 +189,14 @@ export class LotsService {
         ...(input.startPriceTenge === undefined
           ? {}
           : { startPriceTiyn: fromTenge(BigInt(input.startPriceTenge)) }),
+        // Витрина правится по одному полю: не присланное остаётся как было, а
+        // не затирается. Иначе правка цены стирала бы описание.
+        ...(input.title === undefined ? {} : { title: input.title }),
+        ...(input.address === undefined ? {} : { address: input.address }),
+        ...(input.description === undefined ? {} : { description: input.description }),
+        ...(input.areaSqmX100 === undefined ? {} : { areaSqmX100: input.areaSqmX100 }),
+        ...(input.mileageKm === undefined ? {} : { mileageKm: input.mileageKm }),
+        ...(input.buildYear === undefined ? {} : { buildYear: input.buildYear }),
       },
     });
     return toView(updated, updated.viewsCount);

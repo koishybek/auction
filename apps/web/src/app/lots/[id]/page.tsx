@@ -10,7 +10,13 @@ import { DepositWidget } from '@/components/deposit-widget';
 import { PhaseRatchet, phaseLabel } from '@/components/phase-ratchet';
 import { ViewBeacon } from '@/components/view-beacon';
 import { getLot } from '@/lib/api-client';
-import { formatTenge, identifierLabel, lotTypeLabel, nextBidTenge } from '@/lib/format';
+import {
+  formatTenge,
+  identifierLabel,
+  lotTypeLabel,
+  nextBidTenge,
+  objectFacts,
+} from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
@@ -68,10 +74,21 @@ export default async function LotPage({ params }: PageProps) {
           <span className="eyebrow">{phaseLabel(lot.status)}</span>
         </div>
 
-        <h1 className="font-serif text-4xl leading-tight sm:text-5xl">{lotTypeLabel(lot.type)}</h1>
+        <h1 className="font-serif text-4xl leading-tight sm:text-5xl">
+          {lot.title ?? lotTypeLabel(lot.type)}
+        </h1>
+        {lot.address !== null && (
+          <p className="mt-3 text-base text-[var(--color-muted)]">{lot.address}</p>
+        )}
         <p className="tabular mt-4 text-sm text-[var(--color-muted)]">
-          {identifierLabel(lot.type)} · {lot.cadastreOrVin}
+          {lotTypeLabel(lot.type)} · {identifierLabel(lot.type)} {lot.cadastreOrVin}
+          {objectFacts(lot) === '' ? '' : ` · ${objectFacts(lot)}`}
         </p>
+        {lot.description !== null && (
+          <p className="mt-6 max-w-2xl text-sm leading-relaxed text-[var(--color-paper)]">
+            {lot.description}
+          </p>
+        )}
       </header>
 
       <PriceLadder lot={lot} price={price} />

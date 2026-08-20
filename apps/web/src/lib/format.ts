@@ -56,3 +56,39 @@ export function lotTypeLabel(type: 'REALTY' | 'VEHICLE'): string {
 export function identifierLabel(type: 'REALTY' | 'VEHICLE'): string {
   return type === 'REALTY' ? 'Кадастровый номер' : 'VIN';
 }
+
+/** Площадь из сотых квадратного метра: 6240 → «62,4 м²». */
+export function formatArea(areaSqmX100: number): string {
+  const whole = Math.floor(areaSqmX100 / 100);
+  const fraction = areaSqmX100 % 100;
+  const tail = fraction === 0 ? '' : `,${String(Math.round(fraction / 10))}`;
+  return `${whole.toLocaleString('ru-KZ')}${tail} м²`;
+}
+
+/** Пробег: 84 000 → «84 000 км». */
+export function formatMileage(mileageKm: number): string {
+  return `${mileageKm.toLocaleString('ru-KZ')} км`;
+}
+
+/**
+ * Короткая строка характеристик объекта для карточки каталога.
+ *
+ * Только то, что заполнено: пустых прочерков в списке быть не должно — они
+ * читаются как «данных нет и не будет», а данные просто ещё не собраны.
+ */
+export function objectFacts(lot: {
+  type: 'REALTY' | 'VEHICLE';
+  areaSqmX100: number | null;
+  mileageKm: number | null;
+  buildYear: number | null;
+}): string {
+  const facts: string[] = [];
+  if (lot.areaSqmX100 !== null) facts.push(formatArea(lot.areaSqmX100));
+  if (lot.mileageKm !== null) facts.push(formatMileage(lot.mileageKm));
+  if (lot.buildYear !== null) {
+    facts.push(
+      lot.type === 'REALTY' ? `${String(lot.buildYear)} г. постройки` : String(lot.buildYear),
+    );
+  }
+  return facts.join(' · ');
+}

@@ -44,11 +44,29 @@ const priceTenge = z
   .positive()
   .max(1_000_000_000_000, 'Цена выше 1 трлн ₸ — похоже на опечатку');
 
+/**
+ * Витрина объекта: то, по чему человек выбирает, а не идентифицирует.
+ *
+ * Границы длин не косметика: заголовок и адрес рисуются в карточке каталога, и
+ * поле без потолка ломает вёрстку списка на первом же продавце, который решит
+ * записать туда абзац.
+ */
+const showcase = {
+  title: z.string().trim().min(3).max(120).optional(),
+  address: z.string().trim().min(3).max(200).optional(),
+  description: z.string().trim().min(10).max(2000).optional(),
+  /** Площадь в сотых квадратного метра: 62.4 м² приходят как 6240. */
+  areaSqmX100: z.number().int().positive().max(10_000_000).optional(),
+  mileageKm: z.number().int().nonnegative().max(3_000_000).optional(),
+  buildYear: z.number().int().min(1800).max(2100).optional(),
+};
+
 const CreateLotSchema = z
   .object({
     type: z.enum(LOT_TYPES),
     cadastreOrVin,
     startPriceTenge: priceTenge,
+    ...showcase,
   })
   .strict();
 
@@ -56,6 +74,7 @@ const UpdateLotSchema = z
   .object({
     cadastreOrVin: cadastreOrVin.optional(),
     startPriceTenge: priceTenge.optional(),
+    ...showcase,
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, { message: 'Пустая правка' });
