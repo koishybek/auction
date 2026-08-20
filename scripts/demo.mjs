@@ -138,14 +138,27 @@ function randomIin() {
   return String(Math.floor(Math.random() * 1e12)).padStart(12, '0');
 }
 
-/** Полный eGov-вход — другого способа получить верифицированного человека нет. */
+/**
+ * Полный eGov-вход — другого способа получить верифицированного человека нет.
+ *
+ * Возвращается пара целиком, а не один access. Срок его жизни — пятнадцать
+ * минут, и первая версия стенда об этом забыла: через пятнадцать минут ставки
+ * демо-участников переставали проходить, торги закрывались по тишине, а ссылка,
+ * которую человек открывал позже, вела на закрытый лот.
+ */
 async function egovLogin(fio) {
   const init = await call('/api/auth/egov/init');
   await call('/api/auth/egov/dev-approve', {
     body: { sessionId: init.sessionId, iin: randomIin(), fio, biometricConfirmed: true },
   });
   const done = await call('/api/auth/egov/complete', { body: { sessionId: init.sessionId } });
-  return done.tokens.accessToken;
+  return { access: done.tokens.accessToken, refresh: done.tokens.refreshToken };
+}
+
+/** Обновить пару. Старый refresh при этом гасится — так задумано в сервере. */
+async function refreshTokens(pair) {
+  const next = await call('/api/auth/refresh', { body: { refreshToken: pair.refresh } });
+  return { access: next.accessToken, refresh: next.refreshToken };
 }
 
 async function whoami(token) {
@@ -228,7 +241,8 @@ const CATALOG = [
 async function seed() {
   const admin = (await call('/api/auth/dev-login', { body: { roles: ['ADMIN'] } })).accessToken;
 
-  const sellerToken = await egovLogin('Демонстрационный Продавец');
+  // Продавцу нужен только access: он ничего не делает дольше пятнадцати минут.
+  const sellerToken = (await egovLogin('Демонстрационный Продавец')).access;
   const sellerId = await whoami(sellerToken);
   await call(`/api/admin/users/${sellerId}/roles`, {
     method: 'PATCH',
@@ -287,10 +301,10 @@ async function openTrading(lotId, admin) {
   // поддерживать торги живыми в одиночку невозможно — как и в реальности.
   const investors = [];
   for (const fio of ['Демонстрационный Инвестор', 'Второй Инвестор Демо']) {
-    const token = await egovLogin(fio);
-    await call(`/api/lots/${lotId}/deposit/invoice`, { token });
-    await call(`/api/lots/${lotId}/deposit/dev-pay`, { token });
-    investors.push(token);
+    const pair = await egovLogin(fio);
+    await call(`/api/lots/${lotId}/deposit/invoice`, { token: pair.access });
+    await call(`/api/lots/${lotId}/deposit/dev-pay`, { token: pair.access });
+    investors.push(pair);
   }
 
   await placeBid(lotId, investors[0]);
@@ -305,7 +319,8 @@ async function openTrading(lotId, admin) {
  * Демо ходит ровно тем же путём, что браузер участника, — иначе оно
  * показывало бы систему, которой не существует.
  */
-async function placeBid(lotId, token) {
+async function placeBid(lotId, pair) {
+  const token = pair.access;
   const socket = new WebSocket(`ws://127.0.0.1:${String(GATEWAY_PORT)}`);
   await new Promise((done, fail) => {
     const timer = setTimeout(() => {
@@ -334,6 +349,14 @@ async function placeBid(lotId, token) {
         socket.close();
         done(payload);
       }
+      // `error` — это отказ до ставки: протухший токен, чужой лот, кривой кадр.
+      // Без этой ветки стенд просто висел пятнадцать секунд и не понимал, что
+      // именно сломалось.
+      if (payload.event === 'error') {
+        clearTimeout(timer);
+        socket.close();
+        fail(new Error(`сокет отказал: ${String(payload.code ?? 'UNKNOWN')}`));
+      }
     });
     socket.addEventListener('error', (error) => {
       clearTimeout(timer);
@@ -357,15 +380,38 @@ async function placeBid(lotId, token) {
  */
 function keepAlive(state) {
   const BID_EVERY_MS = 35_000;
+  const REFRESH_EVERY_MS = 10 * 60_000;
+
+  const refresher = setInterval(() => {
+    void (async () => {
+      try {
+        state.investors = await Promise.all(state.investors.map((pair) => refreshTokens(pair)));
+      } catch (error) {
+        // Обновление не удалось — входим заново: демо-участник дешёвый.
+        console.error(
+          '[демо] токены не обновились, вхожу заново:',
+          error instanceof Error ? error.message : error,
+        );
+        state.investors = await Promise.all(
+          ['Демонстрационный Инвестор', 'Второй Инвестор Демо'].map((fio) => egovLogin(fio)),
+        );
+        for (const pair of state.investors) {
+          await call(`/api/lots/${state.liveId}/deposit/invoice`, { token: pair.access });
+          await call(`/api/lots/${state.liveId}/deposit/dev-pay`, { token: pair.access });
+        }
+      }
+    })();
+  }, REFRESH_EVERY_MS);
+  refresher.unref?.();
+
   const timer = setInterval(() => {
     void (async () => {
       try {
         const lot = await call(`/api/lots/${state.liveId}`, { method: 'GET' });
         if (lot.status !== 'PHASE_III') {
-          console.log(
-            '[демо] торги закрылись — стенд их больше не поднимает, перезапустите pnpm demo',
-          );
-          clearInterval(timer);
+          // Торги всё-таки закрылись — открываем следующий лот витрины и
+          // говорим новый адрес. Молчать нельзя: ссылка у человека уже на руках.
+          await promoteNextLot(state);
           return;
         }
         state.turn = (state.turn + 1) % state.investors.length;
@@ -376,6 +422,20 @@ function keepAlive(state) {
     })();
   }, BID_EVERY_MS);
   timer.unref?.();
+}
+
+/** Вывести в торги следующий лот витрины, если прежний закрылся. */
+async function promoteNextLot(state) {
+  const candidates = await call('/api/lots?status=PHASE_II&pageSize=1', { method: 'GET' });
+  const next = candidates.items?.[0];
+  if (next === undefined) {
+    console.log('[демо] свободных лотов в Фазе II не осталось — перезапустите pnpm demo');
+    return;
+  }
+  state.investors = await openTrading(next.id, state.admin);
+  state.liveId = next.id;
+  state.turn = 0;
+  console.log(`[демо] прежние торги закрылись, новые здесь: ${WEB_URL}/lots/${next.id}`);
 }
 
 /**
@@ -508,9 +568,9 @@ try {
   await waitFor('http://127.0.0.1:9486/metrics', 'воркер');
   await waitFor(WEB_URL, 'web');
 
-  const { live, investors } = await seed();
+  const { live, investors, admin } = await seed();
   await smokeCheck(live);
-  keepAlive({ liveId: live.id, investors, turn: 0 });
+  keepAlive({ liveId: live.id, investors, admin, turn: 0 });
 
   console.log('');
   console.log('════════════════════════════════════════════════════════');
